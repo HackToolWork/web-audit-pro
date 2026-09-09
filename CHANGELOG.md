@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.0.1
+
+- Fixed Makefile development-tool checks so an active virtual environment is
+  validated by its actual `pytest` executable.
+- Updated regression coverage for missing development tools.
+- CI passes across Python 3.11, 3.12, 3.13, and 3.14, including package and Docker jobs.
+
 ## 5.0.0
 
 - Switched the project license from MIT to Apache-2.0 before public release.

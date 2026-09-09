@@ -1,37 +1,18 @@
-## 5.0.0 — Licensing and release hygiene
-
-- License: Apache-2.0.
-- SPDX identifier: Apache-2.0.
-- Package metadata and documentation are aligned with the repository license.
-
-# Web Audit Pro 5.0.0
+# Web Audit Pro 5.0.1
 
 ## Release highlights
 
-### Persistent configuration
+### Makefile virtual-environment validation
 
-Use `web-audit.toml` for repeatable scan, feature, report, dashboard, and NVD settings.
-Command-line arguments always override configuration values.
+Development targets now verify that required tools exist as executables in the
+selected virtual environment. This prevents an active-environment edge case
+from accidentally falling through to the wrong Python installation.
 
-### Reproducible dependencies
+### CI reliability
 
-Runtime, development, and build dependencies are pinned to exact versions in both
-`requirements*.txt` and `pyproject.toml`.
-
-### Offline CMS advisory enrichment
-
-`web-audit --update-db` explicitly refreshes a local SQLite advisory database from NVD.
-Normal scans with `--cms-vuln-lookup` read that local cache and do not contact NVD.
-
-### Persistent advisory DB in Docker
-
-Docker uses `/app/reports/vulndb.sqlite3` by default (also configurable with `WEB_AUDIT_VULN_DB`), so mounting `/app/reports` preserves advisory data between container runs.
-
-### Developer workflow
-
-`make test`, `make lint`, `make compile`, and `make check` continue to use an active
-`VIRTUAL_ENV` when present, otherwise they bootstrap the repository `.venv`.
-The CI matrix now includes Python 3.14.
+Regression coverage was updated to validate the improved Makefile behavior.
+The CI matrix covers Python 3.11, 3.12, 3.13, and 3.14, with package and
+Docker validation.
 
 ## Installation
 
@@ -47,6 +28,7 @@ make install-dev
 make check
 ```
 
-## 5.0.0
+## Verification
 
-Reliability release: bounded NVD rate-limit recovery, read-only local advisory lookups, lock-safe advisory DB updates, and collision-safe per-run reports/logs for concurrent containers and CI jobs.
+Local validation for the 5.0.1 release candidate includes Ruff linting and
+format checking, Python compilation, dependency checks, and 110 automated tests.
