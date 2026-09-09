@@ -136,7 +136,7 @@ def test_no_stale_release_version_strings_in_tests():
 def test_makefile_checks_pytest_before_running_tests():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert "require-pytest: ensure-dev" in makefile
-    assert "import pytest" in makefile
+    assert '@test -x "$(VENV_BIN)/pytest"' in makefile
     assert "Pytest is missing in the selected virtual environment." in makefile
 
 

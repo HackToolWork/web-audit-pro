@@ -45,7 +45,7 @@ ensure-dev:
 	fi
 
 require-pytest: ensure-dev
-	@$(PYTHON) -c 'import pytest' >/dev/null 2>&1 || { \
+	@test -x "$(VENV_BIN)/pytest" || { \
 		echo '[!] Pytest is missing in the selected virtual environment.' >&2; \
 		echo '[i] Run: $(PYTHON) -m pip install -r requirements-dev.txt' >&2; \
 		exit 2; \
