@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "web-audit-pro"
+message: "If you use web-audit-pro in research, education, or other work, please cite this project."
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/HackToolWork/web-audit-pro"
+url: "https://github.com/HackToolWork/web-audit-pro"
+authors:
+  - family-names: "Web Audit Pro contributors"
+version: "5.0.0"
+date-released: "2026-09-09"

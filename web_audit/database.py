@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterable
+from pathlib import Path
+
+from .models import CheckResult
+
+
+class Database:
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(path)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 5000")
+        self._create_schema()
+
+    def _create_schema(self) -> None:
+        self.conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                result_count INTEGER NOT NULL CHECK(result_count >= 0)
+            );
+
+            CREATE TABLE IF NOT EXISTS results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                status INTEGER,
+                size INTEGER NOT NULL CHECK(size >= 0),
+                elapsed_ms REAL NOT NULL CHECK(elapsed_ms >= 0),
+                scanned_at TEXT NOT NULL,
+                truncated INTEGER NOT NULL CHECK(truncated IN (0, 1)),
+                location TEXT NOT NULL,
+                error TEXT NOT NULL,
+                FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS findings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER NOT NULL,
+                rule_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                severity TEXT NOT NULL CHECK(severity IN ('info', 'low', 'medium', 'high')),
+                category TEXT NOT NULL,
+                evidence TEXT NOT NULL,
+                recommendation TEXT NOT NULL,
+                confidence TEXT NOT NULL CHECK(confidence IN ('low', 'medium', 'high')),
+                FOREIGN KEY(result_id) REFERENCES results(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_results_scan_id ON results(scan_id);
+            CREATE INDEX IF NOT EXISTS idx_results_status ON results(status);
+            CREATE INDEX IF NOT EXISTS idx_findings_result_id ON findings(result_id);
+            CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
+            """
+        )
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(findings)")}
+        if "confidence" not in columns:
+            self.conn.execute(
+                "ALTER TABLE findings ADD COLUMN confidence TEXT NOT NULL DEFAULT 'medium'"
+            )
+        self.conn.commit()
+
+    def save_scan(
+        self,
+        target: str,
+        started_at: str,
+        finished_at: str,
+        results: Iterable[CheckResult],
+    ) -> int:
+        rows = list(results)
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    "INSERT INTO scans(target, started_at, finished_at, result_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (target, started_at, finished_at, len(rows)),
+                )
+                scan_id = int(cur.lastrowid)
+                for item in rows:
+                    result_cur = self.conn.execute(
+                        """
+                        INSERT INTO results(
+                            scan_id, url, status, size, elapsed_ms,
+                            scanned_at, truncated, location, error
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            scan_id,
+                            item.url,
+                            item.status,
+                            item.size,
+                            item.elapsed_ms,
+                            item.scanned_at.isoformat(),
+                            int(item.truncated),
+                            item.location,
+                            item.error,
+                        ),
+                    )
+                    result_id = int(result_cur.lastrowid)
+                    self.conn.executemany(
+                        """
+                        INSERT INTO findings(
+                            result_id, rule_id, title, severity,
+                            category, evidence, recommendation, confidence
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                result_id,
+                                finding.rule_id,
+                                finding.title,
+                                finding.severity,
+                                finding.category,
+                                finding.evidence,
+                                finding.recommendation,
+                                finding.confidence,
+                            )
+                            for finding in item.findings
+                        ],
+                    )
+                return scan_id
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def __enter__(self) -> Database:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()

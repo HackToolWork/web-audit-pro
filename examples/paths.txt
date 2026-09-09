@@ -1,0 +1,8 @@
+# Conservative endpoint inventory. Add only endpoints permitted by the engagement.
+/
+/robots.txt
+/sitemap.xml
+/.well-known/security.txt
+/health
+/status
+/version

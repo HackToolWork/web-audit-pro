@@ -1,0 +1,71 @@
+[
+  {
+    "product": "WordPress",
+    "min_score": 1,
+    "body_markers": [
+      "wp-content/",
+      "wp-includes/",
+      "wordpress"
+    ],
+    "header_markers": {
+      "Link": "api.w.org"
+    },
+    "advisory_url": "https://wordpress.org/news/category/security/"
+  },
+  {
+    "product": "Drupal",
+    "min_score": 1,
+    "body_markers": [
+      "/sites/default/",
+      "drupal-settings-json",
+      "drupal.js"
+    ],
+    "header_markers": {
+      "X-Generator": "Drupal"
+    },
+    "advisory_url": "https://www.drupal.org/security"
+  },
+  {
+    "product": "Joomla",
+    "min_score": 1,
+    "body_markers": [
+      "/media/system/js/",
+      "joomla!",
+      "com_content"
+    ],
+    "header_markers": {},
+    "advisory_url": "https://developer.joomla.org/security-centre.html"
+  },
+  {
+    "product": "Magento",
+    "min_score": 1,
+    "body_markers": [
+      "mage/",
+      "static/frontend/",
+      "magento"
+    ],
+    "header_markers": {},
+    "advisory_url": "https://experienceleague.adobe.com/en/docs/commerce-operations/release/notes/security-patches/overview"
+  },
+  {
+    "product": "PrestaShop",
+    "min_score": 1,
+    "body_markers": [
+      "prestashop",
+      "/themes/"
+    ],
+    "header_markers": {},
+    "advisory_url": "https://github.com/PrestaShop/PrestaShop/security/advisories"
+  },
+  {
+    "product": "Ghost",
+    "min_score": 1,
+    "body_markers": [
+      "ghost.org",
+      "content/ghost/",
+      "ghost-head"
+    ],
+    "header_markers": {},
+    "advisory_url": "https://ghost.org/security/"
+  }
+]
