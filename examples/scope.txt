@@ -1,0 +1,4 @@
+# Replace these examples with assets explicitly authorized by the engagement.
+# One exact host or *.subdomain pattern per line.
+example.com
+*.api.example.com

@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "web-audit-pro"
+version = "5.0.0"
+description = "A low-impact, auditable HTTP security checker for authorized web assessments."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Web Audit Pro contributors" }]
+dependencies = [
+  "requests==2.34.2",
+  "dnspython==2.8.0",
+  "rich==15.0.0",
+  "fastapi==0.141.1",
+  "uvicorn==0.52.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "build==1.6.0",
+  "ruff==0.16.6",
+  "httpx==0.28.1",
+  "httpx2==2.12.0",
+]
+
+[project.scripts]
+web-audit = "web_audit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["web_audit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
