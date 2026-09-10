@@ -12,7 +12,7 @@ import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import PROJECT_NAME
+from . import PROJECT_NAME, __version__
 from .config import Settings, apply_cli_config, coerce_cli_types
 from .database import Database
 from .diffing import compare_reports, load_report, save_diff
@@ -178,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Permit non-local dashboard binding; requires an explicit token",
     )
-    parser.add_argument("--version", action="version", version=PROJECT_NAME)
+    parser.add_argument("--version", action="version", version=f"{PROJECT_NAME} {__version__}")
     parser.add_argument(
         "--company",
         nargs="?",
