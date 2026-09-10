@@ -46,6 +46,74 @@ def test_summary_counts_unique_findings_by_rule_id():
     assert stats["unique_findings"] == 2
 
 
+def test_html_contains_aggregated_security_findings(tmp_path):
+    low = Finding(
+        "headers.csp",
+        "Content Security Policy is missing",
+        "low",
+        "headers",
+        "HTML response lacks CSP.",
+        "Deploy a restrictive CSP.",
+    )
+    high = Finding(
+        "headers.csp",
+        "Content Security Policy is missing",
+        "high",
+        "headers",
+        "High-confidence evidence.",
+        "Deploy a restrictive CSP.",
+    )
+    other = Finding(
+        "headers.hsts",
+        "HSTS is missing",
+        "medium",
+        "headers",
+        "HTTPS response lacks HSTS.",
+        "Enable HSTS.",
+    )
+
+    first = CheckResult(
+        url="https://example.com/",
+        status=200,
+        size=100,
+        elapsed_ms=10.0,
+        scanned_at=datetime.now(UTC),
+        findings=(low, other),
+    )
+    second = CheckResult(
+        url="https://example.com/login",
+        status=200,
+        size=120,
+        elapsed_ms=12.0,
+        scanned_at=datetime.now(UTC),
+        findings=(high,),
+    )
+
+    html_path = tmp_path / "report.html"
+    save_html("https://example.com/", [first, second], html_path)
+
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "Security findings" in html
+    assert "2 unique rules" in html
+    assert "3 observations" in html
+    assert "headers.csp" in html
+    assert "2 affected URLs" in html
+    assert "Deploy a restrictive CSP." in html
+    assert "high" in html.lower()
+
+
+def test_html_shows_empty_security_findings_state(tmp_path):
+    html_path = tmp_path / "report.html"
+
+    save_html("https://example.com/", [], html_path)
+
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "Security findings" in html
+    assert "No security findings." in html
+
+
 def test_reports_are_written_and_html_is_escaped(tmp_path):
     finding = Finding("x", "<b>bad</b>", "low", "test", "<script>", "fix")
     results = [item(200, [finding])]

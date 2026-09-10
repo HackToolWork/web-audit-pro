@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import CheckResult
+from .models import CheckResult, Finding
 
 
 def summary(results: list[CheckResult]) -> dict[str, int]:
@@ -169,6 +169,22 @@ def save_html(
         "cyberpunk": ("#090613", "#f7efff", "#171027", "#ff4ecd"),
     }
     bg, fg, card_bg, accent = themes[theme]
+
+    severity_rank = {"info": 0, "low": 1, "medium": 2, "high": 3}
+    rule_counts: Counter[str] = Counter()
+    urls_by_rule: dict[str, set[str]] = {}
+    representative_findings: dict[str, Finding] = {}
+
+    for result in results:
+        for finding in result.findings:
+            rule_id = finding.rule_id
+            rule_counts[rule_id] += 1
+            urls_by_rule.setdefault(rule_id, set()).add(result.url)
+
+            current = representative_findings.get(rule_id)
+            if current is None or severity_rank[finding.severity] > severity_rank[current.severity]:
+                representative_findings[rule_id] = finding
+
     logo_html = ""
     if logo_path and logo_path.is_file():
         import base64
@@ -179,6 +195,49 @@ def save_html(
             f'<img alt="{html.escape(company)}" style="max-height:56px;max-width:240px"'
             f' src="data:{mime};base64,{encoded_logo}">'
         )
+    summary_items: list[str] = []
+    for rule_id in sorted(
+        rule_counts,
+        key=lambda value: (
+            -severity_rank[representative_findings[value].severity],
+            representative_findings[value].title.lower(),
+            value,
+        ),
+    ):
+        finding = representative_findings[rule_id]
+        badge = _severity_class(html.escape(finding.severity))
+        affected_urls = len(urls_by_rule[rule_id])
+        observations = rule_counts[rule_id]
+        summary_items.append(
+            f'<article class="finding-summary-item">'
+            f'<div><span class="badge {badge}">{html.escape(finding.severity)}</span> '
+            f"<strong>{html.escape(finding.title)}</strong></div>"
+            f'<div class="finding-meta"><code>{html.escape(rule_id)}</code> · '
+            f"{affected_urls} affected URLs · {observations} observations</div>"
+            f'<div class="finding-fix"><strong>Fix:</strong> '
+            f"{html.escape(finding.recommendation)}</div>"
+            "</article>"
+        )
+
+    if summary_items:
+        finding_summary_html = (
+            '<section class="summary-panel">'
+            '<div class="section-heading">'
+            "<h2>Security findings</h2>"
+            f"<span>{stats['unique_findings']} unique rules · "
+            f"{stats['findings']} observations</span>"
+            "</div>"
+            '<div class="finding-summary">' + "".join(summary_items) + "</div>"
+            "</section>"
+        )
+    else:
+        finding_summary_html = (
+            '<section class="summary-panel">'
+            "<h2>Security findings</h2>"
+            '<p class="empty">No security findings.</p>'
+            "</section>"
+        )
+
     rows: list[str] = []
 
     for item in results:
@@ -249,6 +308,18 @@ a {{ color:{accent}; }}
 .severity-info {{ background:#283250; color:#c9d2eb; }}
 .findings {{ margin:0; padding-left:18px; min-width:320px; }}
 .findings li {{ margin-bottom:10px; }}
+.summary-panel {{ margin:24px 0; background:{card_bg}; border:1px solid #283250;
+                  border-radius:12px; padding:20px; }}
+.section-heading {{ display:flex; justify-content:space-between; align-items:baseline;
+                    gap:16px; margin-bottom:16px; }}
+.section-heading h2 {{ margin:0; }}
+.section-heading span {{ opacity:.75; }}
+.finding-summary {{ display:grid; gap:12px; }}
+.finding-summary-item {{ border:1px solid #283250; border-radius:10px; padding:14px; }}
+.finding-meta {{ margin-top:6px; opacity:.75; font-size:13px; }}
+.finding-fix {{ margin-top:8px; }}
+code {{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }}
+.empty {{ opacity:.8; margin:0; }}
 small {{ opacity:.8; display:block; margin-top:4px; }}
 </style>
 </head>
@@ -268,6 +339,7 @@ small {{ opacity:.8; display:block; margin-top:4px; }}
 <small>{stats["unique_findings"]} unique rules</small></div>
 <div class="card">Medium+<strong>{stats["high"] + stats["medium"]}</strong></div>
 </section>
+{finding_summary_html}
 <div class="table-wrap">
 <table>
 <thead><tr><th>URL</th><th>Status</th><th>Size</th><th>Latency ms</th>
