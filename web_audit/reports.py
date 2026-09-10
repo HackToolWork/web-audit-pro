@@ -25,7 +25,9 @@ def summary(results: list[CheckResult]) -> dict[str, int]:
         else "5xx"
         for item in results
     )
-    findings = Counter(finding.severity for item in results for finding in item.findings)
+    all_findings = [finding for item in results for finding in item.findings]
+    findings = Counter(finding.severity for finding in all_findings)
+    unique_findings = {finding.rule_id for finding in all_findings}
     return {
         "total": len(results),
         "2xx": counts["2xx"],
@@ -33,7 +35,8 @@ def summary(results: list[CheckResult]) -> dict[str, int]:
         "4xx": counts["4xx"],
         "5xx": counts["5xx"],
         "errors": counts["errors"],
-        "findings": sum(findings.values()),
+        "findings": len(all_findings),
+        "unique_findings": len(unique_findings),
         "high": findings["high"],
         "medium": findings["medium"],
         "low": findings["low"],
@@ -246,7 +249,7 @@ a {{ color:{accent}; }}
 .severity-info {{ background:#283250; color:#c9d2eb; }}
 .findings {{ margin:0; padding-left:18px; min-width:320px; }}
 .findings li {{ margin-bottom:10px; }}
-small {{ opacity:.8; }}
+small {{ opacity:.8; display:block; margin-top:4px; }}
 </style>
 </head>
 <body>
@@ -261,7 +264,8 @@ small {{ opacity:.8; }}
 <div class="card">4xx<strong>{stats["4xx"]}</strong></div>
 <div class="card">5xx<strong>{stats["5xx"]}</strong></div>
 <div class="card">Errors<strong>{stats["errors"]}</strong></div>
-<div class="card">Findings<strong>{stats["findings"]}</strong></div>
+<div class="card">Findings<strong>{stats["findings"]}</strong>
+<small>{stats["unique_findings"]} unique rules</small></div>
 <div class="card">Medium+<strong>{stats["high"] + stats["medium"]}</strong></div>
 </section>
 <div class="table-wrap">

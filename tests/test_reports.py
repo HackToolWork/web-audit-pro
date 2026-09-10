@@ -27,11 +27,23 @@ def test_summary():
         "5xx": 1,
         "errors": 1,
         "findings": 1,
+        "unique_findings": 1,
         "high": 0,
         "medium": 1,
         "low": 0,
         "info": 0,
     }
+
+
+def test_summary_counts_unique_findings_by_rule_id():
+    first = Finding("headers.csp", "CSP missing", "low", "headers", "evidence", "fix")
+    same_rule = Finding("headers.csp", "CSP missing", "low", "headers", "different evidence", "fix")
+    other = Finding("headers.hsts", "HSTS missing", "medium", "headers", "evidence", "fix")
+
+    stats = summary([item(200, [first, other]), item(404, [same_rule])])
+
+    assert stats["findings"] == 3
+    assert stats["unique_findings"] == 2
 
 
 def test_reports_are_written_and_html_is_escaped(tmp_path):
