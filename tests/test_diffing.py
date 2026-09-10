@@ -61,3 +61,36 @@ def test_compare_reports_detects_severity_change():
             "severity": "low",
         }
     ]
+
+
+def test_compare_reports_preserves_findings_from_duplicate_results():
+    previous = {
+        "target": "https://example.com",
+        "results": [
+            {
+                "url": "https://example.com/",
+                "findings": [{"rule_id": "a", "severity": "low"}],
+            },
+            {
+                "url": "https://example.com/",
+                "findings": [{"rule_id": "b", "severity": "medium"}],
+            },
+        ],
+    }
+    current = {
+        "target": "https://example.com",
+        "results": [
+            {
+                "url": "https://example.com/",
+                "findings": [
+                    {"rule_id": "a", "severity": "low"},
+                    {"rule_id": "b", "severity": "medium"},
+                ],
+            }
+        ],
+    }
+
+    diff = compare_reports(previous, current)
+
+    assert diff["added"] == []
+    assert diff["removed"] == []
