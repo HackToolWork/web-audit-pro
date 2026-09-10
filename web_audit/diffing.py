@@ -21,8 +21,7 @@ def compare_reports(previous: dict, current: dict) -> dict:
             url = result.get("url", "")
             findings = mapping.setdefault(url, set())
             findings.update(
-                (f.get("rule_id"), f.get("severity"))
-                for f in result.get("findings", [])
+                (f.get("rule_id"), f.get("severity")) for f in result.get("findings", [])
             )
         return mapping
 
