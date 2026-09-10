@@ -266,11 +266,10 @@ def test_open_report_uses_absolute_path_and_does_not_fail_scan(monkeypatch, tmp_
     assert Path(calls[0][0][1]).is_absolute()
 
 
-def test_version_flag_prints_canonical_project_name_only(capsys):
+def test_version_flag_prints_project_name_and_version(capsys):
     try:
         cli.main(["--version"])
     except SystemExit as exc:
         assert exc.code == 0
     output = capsys.readouterr().out.strip()
-    assert output == "web-audit-pro"
-    assert not any(ch.isdigit() for ch in output)
+    assert output == "web-audit-pro 5.0.1"
