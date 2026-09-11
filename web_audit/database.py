@@ -131,6 +131,87 @@ class Database:
             self.conn.rollback()
             raise
 
+    def load_scan_history(self, target: str) -> list[dict]:
+        """Load historical audit snapshots for a target, oldest first."""
+        scans = self.conn.execute(
+            """
+            SELECT id, target, started_at, finished_at, result_count
+            FROM scans
+            WHERE target = ?
+            ORDER BY started_at ASC, id ASC
+            """,
+            (target,),
+        ).fetchall()
+
+        history: list[dict] = []
+
+        for scan in scans:
+            results_rows = self.conn.execute(
+                """
+                SELECT
+                    r.id,
+                    r.url,
+                    r.status,
+                    r.size,
+                    r.elapsed_ms,
+                    r.scanned_at,
+                    r.truncated,
+                    r.location,
+                    r.error
+                FROM results AS r
+                WHERE r.scan_id = ?
+                ORDER BY r.id ASC
+                """,
+                (scan["id"],),
+            ).fetchall()
+
+            results: list[dict] = []
+
+            for result in results_rows:
+                finding_rows = self.conn.execute(
+                    """
+                    SELECT
+                        rule_id,
+                        title,
+                        severity,
+                        category,
+                        evidence,
+                        recommendation,
+                        confidence
+                    FROM findings
+                    WHERE result_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (result["id"],),
+                ).fetchall()
+
+                results.append(
+                    {
+                        "url": result["url"],
+                        "status": result["status"],
+                        "size": result["size"],
+                        "elapsed_ms": result["elapsed_ms"],
+                        "scanned_at": result["scanned_at"],
+                        "truncated": bool(result["truncated"]),
+                        "location": result["location"],
+                        "error": result["error"],
+                        "findings": [dict(row) for row in finding_rows],
+                    }
+                )
+
+            history.append(
+                {
+                    "scan_id": int(scan["id"]),
+                    "target": scan["target"],
+                    "started_at": scan["started_at"],
+                    "finished_at": scan["finished_at"],
+                    "result_count": int(scan["result_count"]),
+                    "results": results,
+                }
+            )
+
+        return history
+
     def close(self) -> None:
         self.conn.close()
 
