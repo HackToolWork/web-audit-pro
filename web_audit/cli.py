@@ -19,7 +19,7 @@ from .diffing import compare_reports, load_report, save_diff
 from .dns_audit import findings as dns_findings
 from .dns_audit import inspect_domain
 from .lifecycle_cli import render_lifecycle_summary
-from .lifecycle_reporting import summarize_lifecycle
+from .lifecycle_reporting import summarize_lifecycle, summarize_lifecycle_history
 from .logging import configure_logging, console_print, paint
 from .reports import save_csv, save_html, save_json, summary
 from .sarif import save_sarif
@@ -618,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
             finished_at=finished.isoformat(),
             results=results,
         )
+        scan_history = db.load_scan_history(target)
 
     save_csv(results, settings.csv_path)
     if args.cms_vuln_lookup:
@@ -677,6 +678,9 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             console_print(f"Comparison error: {exc}")
             return 2
+    elif len(scan_history) >= 2:
+        lifecycle = summarize_lifecycle_history(scan_history)
+        console_print(render_lifecycle_summary(lifecycle))
 
     for result in results:
         _print_result(result)

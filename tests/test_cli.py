@@ -371,3 +371,107 @@ def test_cli_compare_renders_lifecycle_summary(monkeypatch, tmp_path, capsys):
     assert "FIXED       1" in output
     assert "[NEW] cors.wildcard_credentials" in output
     assert "[FIXED] headers.referrer_policy" in output
+
+
+def test_cli_uses_database_history_for_regression(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from datetime import UTC, datetime
+
+    from web_audit.database import Database
+    from web_audit.models import CheckResult, Finding
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_target_addresses",
+        lambda target: set(),
+    )
+
+    finding = Finding(
+        "headers.csp",
+        "CSP",
+        "low",
+        "headers",
+        "missing",
+        "add CSP",
+    )
+
+    output_dir = tmp_path / "reports"
+    db_path = output_dir / "audit_results.db"
+
+    with Database(db_path) as db:
+        db.save_scan(
+            "https://example.com",
+            "2026-09-10T10:00:00+00:00",
+            "2026-09-10T10:01:00+00:00",
+            [
+                CheckResult(
+                    url="https://example.com/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(finding,),
+                )
+            ],
+        )
+
+        db.save_scan(
+            "https://example.com",
+            "2026-09-10T11:00:00+00:00",
+            "2026-09-10T11:01:00+00:00",
+            [
+                CheckResult(
+                    url="https://example.com/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(),
+                )
+            ],
+        )
+
+    class DummyScanner:
+        def __init__(self, settings, proxy=None):
+            self.settings = settings
+
+        def scan_target(self, target):
+            return [
+                CheckResult(
+                    url=target + "/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(finding,),
+                )
+            ]
+
+    monkeypatch.setattr(
+        cli,
+        "Scanner",
+        DummyScanner,
+    )
+
+    code = cli.main(
+        [
+            "https://example.com",
+            "--yes-i-am-authorized",
+            "--paths",
+            "/",
+            "--no-dns",
+            "--no-cms",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert "Security changes" in output
+    assert "REGRESSED   1" in output
+    assert "[REGRESSED] headers.csp" in output
