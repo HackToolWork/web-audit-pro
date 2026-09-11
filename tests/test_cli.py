@@ -273,3 +273,101 @@ def test_version_flag_prints_project_name_and_version(capsys):
         assert exc.code == 0
     output = capsys.readouterr().out.strip()
     assert output == "web-audit-pro 5.0.1"
+
+
+def test_cli_compare_renders_lifecycle_summary(monkeypatch, tmp_path, capsys):
+    from datetime import UTC, datetime
+
+    from web_audit.models import CheckResult, Finding
+
+    previous_report = tmp_path / "previous.json"
+    previous_report.write_text(
+        """
+{
+  "schema_version": "4.0",
+  "tool": "Web Audit Pro",
+  "target": "https://example.com",
+  "generated_at": "2026-09-10T00:00:00+00:00",
+  "summary": {},
+  "results": [
+    {
+      "url": "https://example.com/",
+      "status": 200,
+      "size": 10,
+      "elapsed_ms": 1.0,
+      "scanned_at": "2026-09-10T00:00:00+00:00",
+      "truncated": false,
+      "location": "",
+      "error": "",
+      "findings": [
+        {
+          "rule_id": "headers.referrer_policy",
+          "title": "Missing Referrer-Policy header",
+          "severity": "low",
+          "category": "headers",
+          "evidence": "missing",
+          "recommendation": "Set a Referrer-Policy header.",
+          "confidence": "high"
+        }
+      ]
+    }
+  ]
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "resolve_target_addresses", lambda target: set())
+
+    class DummyScanner:
+        def __init__(self, settings, proxy=None):
+            self.settings = settings
+
+        def scan_target(self, target):
+            return [
+                CheckResult(
+                    url=target + "/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(
+                        Finding(
+                            rule_id="cors.wildcard_credentials",
+                            title="Wildcard CORS with credentials",
+                            severity="medium",
+                            category="cors",
+                            evidence="Access-Control-Allow-Origin: *",
+                            recommendation="Restrict allowed origins.",
+                        ),
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr(cli, "Scanner", DummyScanner)
+
+    code = cli.main(
+        [
+            "https://example.com",
+            "--yes-i-am-authorized",
+            "--paths",
+            "/",
+            "--no-dns",
+            "--no-cms",
+            "--output-dir",
+            str(tmp_path / "current"),
+            "--compare",
+            str(previous_report),
+        ]
+    )
+
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert "DIFF:" in output
+    assert "Security changes" in output
+    assert "NEW         1" in output
+    assert "FIXED       1" in output
+    assert "[NEW] cors.wildcard_credentials" in output
+    assert "[FIXED] headers.referrer_policy" in output

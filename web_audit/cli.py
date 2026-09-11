@@ -18,6 +18,8 @@ from .database import Database
 from .diffing import compare_reports, load_report, save_diff
 from .dns_audit import findings as dns_findings
 from .dns_audit import inspect_domain
+from .lifecycle_cli import render_lifecycle_summary
+from .lifecycle_reporting import summarize_lifecycle
 from .logging import configure_logging, console_print, paint
 from .reports import save_csv, save_html, save_json, summary
 from .sarif import save_sarif
@@ -659,12 +661,19 @@ def main(argv: list[str] | None = None) -> int:
     save_sarif(results, settings.sarif_path)
     if args.compare:
         try:
-            diff = compare_reports(load_report(args.compare), load_report(settings.json_path))
+            previous_report = load_report(args.compare)
+            current_report = load_report(settings.json_path)
+
+            diff = compare_reports(previous_report, current_report)
             save_diff(diff, settings.diff_path)
+
             console_print(
                 f"DIFF: {settings.diff_path} | "
                 f"added={diff['added_count']} removed={diff['removed_count']}"
             )
+
+            lifecycle = summarize_lifecycle(previous_report, current_report)
+            console_print(render_lifecycle_summary(lifecycle))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             console_print(f"Comparison error: {exc}")
             return 2
