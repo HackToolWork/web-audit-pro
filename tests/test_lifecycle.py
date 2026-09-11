@@ -2,7 +2,10 @@ import pytest
 
 from web_audit.identity import build_finding_identity
 from web_audit.lifecycle import (
+    FindingHistory,
     FindingObservation,
+    FindingState,
+    classify_history,
     classify_transition,
 )
 from web_audit.models import Finding
@@ -113,3 +116,66 @@ def test_different_identity_is_not_a_transition():
 def test_missing_both_observations_is_invalid():
     with pytest.raises(ValueError, match="at least one observation is required"):
         classify_transition(None, None)
+
+
+def test_history_detects_fixed_then_regressed():
+    current = observation()
+
+    history = FindingHistory(
+        states=(
+            FindingState(observation=current),
+            FindingState(observation=None),
+        )
+    )
+
+    result = classify_history(history, current)
+
+    assert result.state == "regressed"
+    assert result.previous == current
+    assert result.current == current
+
+
+def test_history_treats_repeated_absence_as_no_transition():
+    previous = observation()
+
+    history = FindingHistory(
+        states=(
+            FindingState(observation=previous),
+            FindingState(observation=None),
+        )
+    )
+
+    result = classify_history(history, None)
+
+    assert result.state is None
+    assert result.previous == previous
+    assert result.current is None
+
+
+def test_history_treats_return_after_multiple_absences_as_regressed():
+    previous = observation()
+
+    history = FindingHistory(
+        states=(
+            FindingState(observation=previous),
+            FindingState(observation=None),
+            FindingState(observation=None),
+        )
+    )
+
+    result = classify_history(history, previous)
+
+    assert result.state == "regressed"
+
+
+def test_history_severity_change_without_absence_is_changed():
+    previous = observation(severity="low")
+    current = observation(severity="medium")
+
+    history = FindingHistory(states=(FindingState(observation=previous),))
+
+    result = classify_history(history, current)
+
+    assert result.state == "changed"
+    assert result.previous == previous
+    assert result.current == current
