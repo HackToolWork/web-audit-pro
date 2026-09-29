@@ -8,7 +8,9 @@
 
 [English](README.md) **| Русский**
 
-> **Web Audit Pro — низконагруженный и аудируемый набор инструментов для авторизованной оценки безопасности веб-систем, security engineering и bug-bounty triage.**
+> **Web Audit Pro — низконагруженный и аудируемый набор инструментов для авторизованной оценки безопасности веб-систем, security engineering и bug-bounty triage** — с понятными отчётами для владельцев сайтов на русском и английском языках.
+>
+> Сайт проекта: **[sitozor.ru](https://sitozor.ru)** (Сайтозор)
 
 Проект объединяет детерминированные HTTP-проверки, пассивный DNS- и JavaScript-анализ, fingerprinting CMS, локальное обогащение данными об уязвимостях, контроль scope, rate limiting, историю сканирований, воспроизводимые отчёты, SARIF, опциональный TUI и локальную read-only web-панель.
 
@@ -18,7 +20,16 @@
 
 ## За 60 секунд до первого запуска
 
-### Kali Linux / Debian / Ubuntu
+### Любая система с Python 3.11+ (рекомендуется)
+
+```bash
+pipx install web-audit-pro
+web-audit https://example.com
+```
+
+[pipx](https://pipx.pypa.io/) устанавливает инструмент в отдельное окружение (в Kali, Debian и Ubuntu: `sudo apt install pipx`). Подойдёт и `pip install web-audit-pro`. Программа спросит подтверждение, что вам можно проверять сайт, а после проверки откроет отчёт для владельца.
+
+### Kali Linux / Debian / Ubuntu из исходников
 
 ```bash
 git clone https://github.com/HackToolWork/web-audit-pro.git

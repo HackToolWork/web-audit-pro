@@ -2,13 +2,15 @@
 
 [![CI](https://github.com/HackToolWork/web-audit-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/HackToolWork/web-audit-pro/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/HackToolWork/web-audit-pro/actions/workflows/codeql.yml/badge.svg)](https://github.com/HackToolWork/web-audit-pro/actions/workflows/codeql.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/HackToolWork/web-audit-pro/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Security](https://img.shields.io/badge/security-responsible%20use-green.svg)](SECURITY.md)
+[![Security](https://img.shields.io/badge/security-responsible%20use-green.svg)](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md)
 
-**English** | [Русский](README.ru.md)
+**English** | [Русский](https://github.com/HackToolWork/web-audit-pro/blob/main/README.ru.md)
 
-> **Web Audit Pro is a low-impact, auditable toolkit for authorized web security assessment, security engineering, and bug-bounty triage.**
+> **Web Audit Pro is a low-impact, auditable toolkit for authorized web security assessment, security engineering, and bug-bounty triage** — with plain-language reports that site owners understand, in English and Russian.
+>
+> Project site: **[sitozor.ru](https://sitozor.ru)** (Sitozor)
 
 It combines deterministic HTTP checks, passive DNS and JavaScript analysis, CMS fingerprinting, local vulnerability enrichment, scope enforcement, rate limiting, scan history, reproducible reports, SARIF output, an optional TUI, and a local read-only dashboard.
 
@@ -18,7 +20,16 @@ It combines deterministic HTTP checks, passive DNS and JavaScript analysis, CMS 
 
 ## 60-second start
 
-### Kali Linux / Debian / Ubuntu
+### Any system with Python 3.11+ (recommended)
+
+```bash
+pipx install web-audit-pro
+web-audit https://example.com
+```
+
+[pipx](https://pipx.pypa.io/) installs the tool in its own environment (`sudo apt install pipx` on Kali/Debian/Ubuntu). `pip install web-audit-pro` works too. The scan asks you to confirm that you may test the site, then opens the owner report.
+
+### Kali Linux / Debian / Ubuntu from source
 
 ```bash
 git clone https://github.com/HackToolWork/web-audit-pro.git
@@ -564,7 +575,7 @@ It intentionally does **not** provide:
 
 Before testing a public program, read its rules, identify the exact in-scope hosts, respect its rate limits, and keep evidence sufficient to reproduce findings without exposing secrets unnecessarily.
 
-See [SECURITY.md](SECURITY.md) for the project's security policy and reporting process.
+See [SECURITY.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md) for the project's security policy and reporting process.
 
 ---
 
@@ -593,9 +604,9 @@ Please keep changes focused, add regression tests for bug fixes, avoid developer
 
 Read:
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- [SECURITY.md](SECURITY.md)
+- [CONTRIBUTING.md](https://github.com/HackToolWork/web-audit-pro/blob/main/CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](https://github.com/HackToolWork/web-audit-pro/blob/main/CODE_OF_CONDUCT.md)
+- [SECURITY.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md)
 
 ---
 
@@ -616,10 +627,10 @@ The repository also runs CodeQL and dependency review through GitHub Actions.
 ## Support and community
 
 - **Repository:** https://github.com/HackToolWork/web-audit-pro
-- **Security:** [SECURITY.md](SECURITY.md)
-- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Support:** [SUPPORT.md](SUPPORT.md)
-- **License:** [Apache-2.0](LICENSE)
+- **Security:** [SECURITY.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md)
+- **Contributing:** [CONTRIBUTING.md](https://github.com/HackToolWork/web-audit-pro/blob/main/CONTRIBUTING.md)
+- **Support:** [SUPPORT.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SUPPORT.md)
+- **License:** [Apache-2.0](https://github.com/HackToolWork/web-audit-pro/blob/main/LICENSE)
 
 ### Sponsorship
 
@@ -631,4 +642,4 @@ Web Audit Pro is open source. Sponsorship can support maintenance, documentation
 
 Web Audit Pro is licensed under the **Apache License 2.0**.
 
-See [LICENSE](LICENSE).
+See [LICENSE](https://github.com/HackToolWork/web-audit-pro/blob/main/LICENSE).
