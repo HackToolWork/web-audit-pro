@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added `web_audit.audit.run_audit()`, the scan pipeline as a library call
+  (scan, DNS/TLS/WordPress checks, coverage) shared by the CLI and hosted
+  services. It prints nothing; messages go to a `notify` callback, and network
+  helpers can be injected. CLI behaviour is unchanged.
+
 ## 5.1.0
 
 - Terminal messages are available in English and Russian and follow the report

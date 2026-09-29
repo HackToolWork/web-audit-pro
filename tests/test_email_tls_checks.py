@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from web_audit import cli, dns_audit, tls_audit
+from web_audit import audit, cli, dns_audit, tls_audit
 from web_audit.dns_audit import DNSReport
 from web_audit.models import CheckResult
 from web_audit.tls_audit import CertificateReport
@@ -143,10 +143,10 @@ def test_inspect_certificate_reports_connection_failure(monkeypatch):
 
 
 def test_ip_literal_detection_does_not_skip_domains_with_digits():
-    assert cli._is_ip_literal("192.0.2.1")
-    assert cli._is_ip_literal("2001:db8::1")
-    assert not cli._is_ip_literal("site24.ru")
-    assert not cli._is_ip_literal("1c-bitrix.ru")
+    assert audit.is_ip_literal("192.0.2.1")
+    assert audit.is_ip_literal("2001:db8::1")
+    assert not audit.is_ip_literal("site24.ru")
+    assert not audit.is_ip_literal("1c-bitrix.ru")
 
 
 class _Scanner:
