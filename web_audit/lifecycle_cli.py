@@ -6,6 +6,7 @@ _STATE_LABELS = (
     ("fixed", "FIXED"),
     ("changed", "CHANGED"),
     ("regressed", "REGRESSED"),
+    ("unverified", "UNVERIFIED"),
 )
 
 
@@ -17,19 +18,11 @@ def render_lifecycle_summary(summary: dict) -> str:
     ]
 
     for key, label in _STATE_LABELS:
-        lines.append(f"{label:<12}{summary[f'{key}_count']}")
-
-    sections = (
-        ("new", "NEW"),
-        ("present", "PRESENT"),
-        ("fixed", "FIXED"),
-        ("changed", "CHANGED"),
-        ("regressed", "REGRESSED"),
-    )
+        lines.append(f"{label:<12}{summary.get(f'{key}_count', 0)}")
 
     has_changes = False
 
-    for key, label in sections:
+    for key, label in _STATE_LABELS:
         items = summary.get(key, [])
         if not items:
             continue
@@ -50,6 +43,8 @@ def render_lifecycle_summary(summary: dict) -> str:
                 lines.append(f"  [{label}] {rule_id}")
 
             lines.append(f"    {url}")
+            if key == "unverified":
+                lines.append(f"    {item.get('reason', 'A successful recheck is required.')}")
 
     if not has_changes:
         lines.append("")

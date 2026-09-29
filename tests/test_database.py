@@ -1,4 +1,7 @@
+import sqlite3
 from datetime import UTC, datetime
+
+import pytest
 
 from web_audit.database import Database
 from web_audit.models import CheckResult, Finding
@@ -144,3 +147,51 @@ def test_load_scan_history_ignores_other_targets(tmp_path):
 
     assert len(history) == 1
     assert history[0]["target"] == "https://example.com"
+
+
+def test_legacy_database_migration_preserves_results_as_unverified(tmp_path):
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE scans (
+                id INTEGER PRIMARY KEY, target TEXT, started_at TEXT,
+                finished_at TEXT, result_count INTEGER
+            );
+            CREATE TABLE results (
+                id INTEGER PRIMARY KEY, scan_id INTEGER, url TEXT, status INTEGER,
+                size INTEGER, elapsed_ms REAL, scanned_at TEXT, truncated INTEGER,
+                location TEXT, error TEXT
+            );
+            CREATE TABLE findings (
+                id INTEGER PRIMARY KEY, result_id INTEGER, rule_id TEXT, title TEXT,
+                severity TEXT, category TEXT, evidence TEXT, recommendation TEXT,
+                confidence TEXT
+            );
+            INSERT INTO scans VALUES (1, 'https://example.com', 'a', 'b', 1);
+            INSERT INTO results VALUES (
+                1, 1, 'https://example.com/', 200, 10, 1.0, 'a', 0, '', ''
+            );
+            INSERT INTO findings VALUES (
+                1, 1, 'headers.csp', 'CSP', 'low', 'headers', 'missing', 'add CSP', 'high'
+            );
+        """)
+
+    # Reopening must be safe as well as the initial migration.
+    for _ in range(2):
+        with Database(path) as db:
+            result = db.load_scan_history("https://example.com")[0]["results"][0]
+            assert result["url"] == "https://example.com/"
+            assert result["findings"][0]["rule_id"] == "headers.csp"
+            assert result["verification_version"] == 0
+            assert result["verified_rules"] == []
+
+
+@pytest.mark.parametrize("stored_rules", ["[", '"headers.csp"', "{}", '["headers.csp", 1]'])
+def test_damaged_verification_metadata_is_unknown(tmp_path, stored_rules):
+    with Database(tmp_path / "audit.db") as db:
+        db.save_scan("https://example.com", "a", "b", [make_result()])
+        db.conn.execute(
+            "UPDATE results SET verified_rules = ?, verification_version = 1", (stored_rules,)
+        )
+        result = db.load_scan_history("https://example.com")[0]["results"][0]
+    assert result["verified_rules"] == []

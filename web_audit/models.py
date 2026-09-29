@@ -33,6 +33,10 @@ class CheckResult:
     error: str = ""
     findings: tuple[Finding, ...] = field(default_factory=tuple)
     discovered_urls: tuple[str, ...] = field(default_factory=tuple)
+    # Positive per-rule checks used for conservative absence verification.
+    # Version zero denotes legacy/unknown coverage, never a successful recheck.
+    verified_rules: tuple[str, ...] = field(default_factory=tuple)
+    verification_version: int = 0
 
     @property
     def is_http_response(self) -> bool:

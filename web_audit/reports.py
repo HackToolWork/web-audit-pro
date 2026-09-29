@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import html
 import json
@@ -8,8 +9,12 @@ import tempfile
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from .models import CheckResult, Finding
+from .action_plan import build_action_plan
+from .action_plan_rendering import render_action_plan_html, render_action_plan_markdown
+from .lifecycle_cli import render_lifecycle_summary
+from .models import CheckResult
 
 
 def summary(results: list[CheckResult]) -> dict[str, int]:
@@ -97,7 +102,7 @@ def save_csv(results: list[CheckResult], path: Path) -> None:
 
 def save_json(target: str, results: list[CheckResult], path: Path) -> None:
     payload = {
-        "schema_version": "4.0",
+        "schema_version": "4.1",
         "tool": "Web Audit Pro",
         "target": target,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -112,6 +117,8 @@ def save_json(target: str, results: list[CheckResult], path: Path) -> None:
                 "truncated": item.truncated,
                 "location": item.location,
                 "error": item.error,
+                "verified_rules": list(item.verified_rules),
+                "verification_version": item.verification_version,
                 "findings": [
                     {
                         "rule_id": finding.rule_id,
@@ -148,8 +155,44 @@ def _status_class(status: int | None) -> str:
     return "error"
 
 
+def save_action_plan(
+    target: str,
+    results: list[CheckResult],
+    path: Path,
+    *,
+    lifecycle: dict | None = None,
+) -> None:
+    """Export the same triage plan as HTML in a portable Markdown document."""
+    plan = build_action_plan(results)
+    document = render_action_plan_markdown(target, plan, lifecycle=lifecycle)
+    _atomic_write(path, lambda file: file.write(document))
+
+
 def _severity_class(severity: str) -> str:
     return f"severity-{severity}"
+
+
+def _url_html(url: str) -> str:
+    label = html.escape(url, quote=True)
+    try:
+        is_web_url = urlsplit(url).scheme.lower() in {"http", "https"}
+    except ValueError:
+        is_web_url = False
+    if not is_web_url:
+        return label
+    return f'<a href="{label}" target="_blank" rel="noopener noreferrer">{label}</a>'
+
+
+def logo_html(logo_path: Path | None, company: str) -> str:
+    """Embed a PNG/JPEG logo as a data URI so reports stay single-file."""
+    if not logo_path or not logo_path.is_file():
+        return ""
+    mime = "image/png" if logo_path.suffix.lower() == ".png" else "image/jpeg"
+    encoded_logo = base64.b64encode(logo_path.read_bytes()).decode()
+    return (
+        f'<img alt="{html.escape(company)}" style="max-height:56px;max-width:240px"'
+        f' src="data:{mime};base64,{encoded_logo}">'
+    )
 
 
 def save_html(
@@ -160,9 +203,23 @@ def save_html(
     company: str = "Web Audit Pro",
     theme: str = "dark",
     logo_path: Path | None = None,
+    lifecycle: dict | None = None,
 ) -> None:
     stats = summary(results)
     generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lifecycle_html = ""
+    if lifecycle is not None:
+        lifecycle_html = (
+            '<section class="summary-panel">'
+            "<h2>Recheck results</h2>"
+            "<p>FIXED means a supported condition passed its recheck. "
+            "UNVERIFIED means there is not enough evidence to confirm its absence.</p>"
+            "<p>CSP and Referrer-Policy rechecks confirm header presence only; "
+            "policy syntax and effectiveness are not validated.</p>"
+            '<pre class="lifecycle-summary">'
+            + html.escape(render_lifecycle_summary(lifecycle))
+            + "</pre></section>"
+        )
     themes = {
         "dark": ("#0b1020", "#ecf1ff", "#151d33", "#84aaff"),
         "light": ("#f6f8fb", "#172033", "#ffffff", "#2457c5"),
@@ -170,73 +227,9 @@ def save_html(
     }
     bg, fg, card_bg, accent = themes[theme]
 
-    severity_rank = {"info": 0, "low": 1, "medium": 2, "high": 3}
-    rule_counts: Counter[str] = Counter()
-    urls_by_rule: dict[str, set[str]] = {}
-    representative_findings: dict[str, Finding] = {}
-
-    for result in results:
-        for finding in result.findings:
-            rule_id = finding.rule_id
-            rule_counts[rule_id] += 1
-            urls_by_rule.setdefault(rule_id, set()).add(result.url)
-
-            current = representative_findings.get(rule_id)
-            if current is None or severity_rank[finding.severity] > severity_rank[current.severity]:
-                representative_findings[rule_id] = finding
-
-    logo_html = ""
-    if logo_path and logo_path.is_file():
-        import base64
-
-        mime = "image/png" if logo_path.suffix.lower() == ".png" else "image/jpeg"
-        encoded_logo = base64.b64encode(logo_path.read_bytes()).decode()
-        logo_html = (
-            f'<img alt="{html.escape(company)}" style="max-height:56px;max-width:240px"'
-            f' src="data:{mime};base64,{encoded_logo}">'
-        )
-    summary_items: list[str] = []
-    for rule_id in sorted(
-        rule_counts,
-        key=lambda value: (
-            -severity_rank[representative_findings[value].severity],
-            representative_findings[value].title.lower(),
-            value,
-        ),
-    ):
-        finding = representative_findings[rule_id]
-        badge = _severity_class(html.escape(finding.severity))
-        affected_urls = len(urls_by_rule[rule_id])
-        observations = rule_counts[rule_id]
-        summary_items.append(
-            f'<article class="finding-summary-item">'
-            f'<div><span class="badge {badge}">{html.escape(finding.severity)}</span> '
-            f"<strong>{html.escape(finding.title)}</strong></div>"
-            f'<div class="finding-meta"><code>{html.escape(rule_id)}</code> · '
-            f"{affected_urls} affected URLs · {observations} observations</div>"
-            f'<div class="finding-fix"><strong>Fix:</strong> '
-            f"{html.escape(finding.recommendation)}</div>"
-            "</article>"
-        )
-
-    if summary_items:
-        finding_summary_html = (
-            '<section class="summary-panel">'
-            '<div class="section-heading">'
-            "<h2>Security findings</h2>"
-            f"<span>{stats['unique_findings']} unique rules · "
-            f"{stats['findings']} observations</span>"
-            "</div>"
-            '<div class="finding-summary">' + "".join(summary_items) + "</div>"
-            "</section>"
-        )
-    else:
-        finding_summary_html = (
-            '<section class="summary-panel">'
-            "<h2>Security findings</h2>"
-            '<p class="empty">No security findings.</p>'
-            "</section>"
-        )
+    plan = build_action_plan(results)
+    finding_summary_html = render_action_plan_html(plan, lifecycle=lifecycle)
+    logo = logo_html(logo_path, company)
 
     rows: list[str] = []
 
@@ -262,8 +255,7 @@ def save_html(
         rows.append(
             f"""
             <tr>
-                <td><a href="{html.escape(item.url, quote=True)}" target="_blank"
-                    rel="noopener noreferrer">{html.escape(item.url)}</a></td>
+                <td>{_url_html(item.url)}</td>
                 <td><span class="badge {_status_class(item.status)}">{status}</span></td>
                 <td>{item.size:,}</td>
                 <td>{item.elapsed_ms:.2f}</td>
@@ -284,7 +276,7 @@ def save_html(
 <style>
 :root {{ color-scheme: light dark; }}
 body {{ font-family: system-ui, sans-serif; margin: 0; background: {bg}; color: {fg}; }}
-main {{ max-width: 1600px; margin: auto; padding: 32px; }}
+main {{ max-width: 1400px; margin: auto; padding: clamp(16px, 3vw, 32px); }}
 h1 {{ margin-bottom: 6px; }}
 .meta {{ opacity: .75; }}
 .cards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
@@ -292,9 +284,9 @@ h1 {{ margin-bottom: 6px; }}
 .card {{ background: {card_bg}; border: 1px solid #283250; border-radius: 12px; padding: 16px; }}
 .card strong {{ display:block; font-size: 28px; margin-top: 6px; }}
 .table-wrap {{ overflow:auto; border:1px solid #283250; border-radius:12px; }}
-table {{ width:100%; border-collapse:collapse; background:#11182b; }}
+table {{ width:100%; border-collapse:collapse; background:{card_bg}; }}
 th,td {{ padding:12px 14px; border-bottom:1px solid #283250; text-align:left; vertical-align:top; }}
-th {{ position:sticky; top:0; background:#18223b; }}
+th {{ position:sticky; top:0; background:{card_bg}; }}
 a {{ color:{accent}; }}
 .badge {{ display:inline-block; min-width:44px; text-align:center;
           padding:4px 8px; border-radius:999px; font-weight:700; }}
@@ -310,36 +302,52 @@ a {{ color:{accent}; }}
 .findings li {{ margin-bottom:10px; }}
 .summary-panel {{ margin:24px 0; background:{card_bg}; border:1px solid #283250;
                   border-radius:12px; padding:20px; }}
-.section-heading {{ display:flex; justify-content:space-between; align-items:baseline;
-                    gap:16px; margin-bottom:16px; }}
-.section-heading h2 {{ margin:0; }}
-.section-heading span {{ opacity:.75; }}
-.finding-summary {{ display:grid; gap:12px; }}
-.finding-summary-item {{ border:1px solid #283250; border-radius:10px; padding:14px; }}
 .finding-meta {{ margin-top:6px; opacity:.75; font-size:13px; }}
-.finding-fix {{ margin-top:8px; }}
+.action-plan h2 {{ margin-top:0; }}
+.plan-explanation, .recheck-instructions {{ max-width:90ch; line-height:1.6; }}
+.coverage-note {{ border-left:3px solid {accent}; padding:10px 14px; line-height:1.5; }}
+.coverage-details li, .pending-rechecks li {{ margin:12px 0; overflow-wrap:anywhere; }}
+.action-list {{ list-style:none; padding:0; display:grid; gap:18px; }}
+.action-item {{ border:1px solid #536078; border-radius:10px; padding:clamp(14px, 2vw, 24px);
+                overflow-wrap:anywhere; line-height:1.55; }}
+.action-heading {{ display:flex; align-items:flex-start; gap:14px; }}
+.action-heading h3 {{ margin:8px 0 0; font-size:1.15rem; }}
+.action-number {{ font-size:1.4rem; color:{accent}; font-variant-numeric:tabular-nums; }}
+.action-next {{ font-weight:600; margin-left:8px; }}
+summary {{ cursor:pointer; font-weight:600; padding:8px 0; }}
+.task-evidence {{ padding-left:20px; }}
+.task-evidence li {{ margin:20px 0; }}
+.task-evidence pre {{ white-space:pre-wrap; overflow-wrap:anywhere; font-size:.9rem; }}
+.pending-rechecks {{ border-top:1px solid #536078; margin-top:20px; }}
+@media print {{
+    body {{ background:#fff; color:#111; }}
+    main {{ max-width:none; padding:0; }}
+    .card, .summary-panel, table, th {{ background:#fff; color:#111; }}
+    .action-item, tr {{ break-inside:avoid; }}
+}}
 code {{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }}
 .empty {{ opacity:.8; margin:0; }}
+.lifecycle-summary {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 small {{ opacity:.8; display:block; margin-top:4px; }}
 </style>
 </head>
 <body>
 <main>
-<div class="meta">{logo_html}</div>
+<div class="meta">{logo}</div>
 <h1>{html.escape(company)} — Web Audit Report</h1>
 <div class="meta">Target: <strong>{html.escape(target)}</strong> · Generated: {generated}</div>
 <section class="cards">
-<div class="card">URLs<strong>{stats["total"]}</strong></div>
-<div class="card">2xx<strong>{stats["2xx"]}</strong></div>
-<div class="card">3xx<strong>{stats["3xx"]}</strong></div>
-<div class="card">4xx<strong>{stats["4xx"]}</strong></div>
-<div class="card">5xx<strong>{stats["5xx"]}</strong></div>
-<div class="card">Errors<strong>{stats["errors"]}</strong></div>
+<div class="card">Requested URLs<strong>{plan["coverage"]["total_urls"]}</strong></div>
 <div class="card">Findings<strong>{stats["findings"]}</strong>
 <small>{stats["unique_findings"]} unique rules</small></div>
-<div class="card">Medium+<strong>{stats["high"] + stats["medium"]}</strong></div>
+<div class="card">Medium / high<strong>{stats["high"] + stats["medium"]}</strong></div>
+<div class="card">URLs to check again
+<strong>{len(plan["coverage"]["incomplete_urls"])}</strong></div>
 </section>
+<p class="meta">HTTP responses: 2xx {stats["2xx"]} · 3xx {stats["3xx"]} ·
+4xx {stats["4xx"]} · 5xx {stats["5xx"]} · Request errors {stats["errors"]}</p>
 {finding_summary_html}
+{lifecycle_html}
 <div class="table-wrap">
 <table>
 <thead><tr><th>URL</th><th>Status</th><th>Size</th><th>Latency ms</th>

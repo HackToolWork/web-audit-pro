@@ -88,7 +88,7 @@ def test_severity_change_is_changed():
 def test_removed_observation_is_fixed():
     previous = observation()
 
-    result = classify_transition(previous, None)
+    result = classify_transition(previous, None, absence_verified=True)
 
     assert result.state == "fixed"
     assert result.previous == previous
@@ -124,7 +124,7 @@ def test_history_detects_fixed_then_regressed():
     history = FindingHistory(
         states=(
             FindingState(observation=current),
-            FindingState(observation=None),
+            FindingState(observation=None, absence_verified=True),
         )
     )
 
@@ -141,11 +141,11 @@ def test_history_treats_repeated_absence_as_no_transition():
     history = FindingHistory(
         states=(
             FindingState(observation=previous),
-            FindingState(observation=None),
+            FindingState(observation=None, absence_verified=True),
         )
     )
 
-    result = classify_history(history, None)
+    result = classify_history(history, None, absence_verified=True)
 
     assert result.state is None
     assert result.previous == previous
@@ -158,8 +158,8 @@ def test_history_treats_return_after_multiple_absences_as_regressed():
     history = FindingHistory(
         states=(
             FindingState(observation=previous),
-            FindingState(observation=None),
-            FindingState(observation=None),
+            FindingState(observation=None, absence_verified=True),
+            FindingState(observation=None, absence_verified=True),
         )
     )
 
@@ -179,3 +179,42 @@ def test_history_severity_change_without_absence_is_changed():
     assert result.state == "changed"
     assert result.previous == previous
     assert result.current == current
+
+
+def test_absence_requires_explicit_verification():
+    previous = observation()
+
+    assert classify_transition(previous, None).state == "unverified"
+    history = FindingHistory(states=(FindingState(previous),))
+    assert classify_history(history, None).state == "unverified"
+    assert classify_history(history, None, absence_verified=True).state == "fixed"
+
+
+@pytest.mark.parametrize(("severity", "expected"), [("low", "present"), ("medium", "changed")])
+def test_unknown_history_gap_does_not_establish_regression(severity, expected):
+    previous = observation()
+    history = FindingHistory(states=(FindingState(previous), FindingState(None)))
+
+    assert classify_history(history, observation(severity=severity)).state == expected
+
+
+def test_unknown_gap_after_verified_absence_preserves_regression():
+    previous = observation()
+    history = FindingHistory(
+        states=(
+            FindingState(previous),
+            FindingState(None, absence_verified=True),
+            FindingState(None),
+        )
+    )
+
+    assert classify_history(history, previous).state == "regressed"
+    assert classify_history(history, None).state == "unverified"
+    assert classify_history(history, None, absence_verified=True).state is None
+
+
+def test_verified_absence_after_unknown_gap_is_fixed():
+    previous = observation()
+    history = FindingHistory(states=(FindingState(previous), FindingState(None)))
+
+    assert classify_history(history, None, absence_verified=True).state == "fixed"

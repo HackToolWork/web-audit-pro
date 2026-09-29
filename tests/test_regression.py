@@ -33,7 +33,7 @@ def observation(severity: str = "low") -> FindingObservation:
 def state(
     observation: FindingObservation | None,
 ) -> FindingState:
-    return FindingState(observation=observation)
+    return FindingState(observation=observation, absence_verified=observation is None)
 
 
 def test_present_absent_is_fixed():
@@ -43,7 +43,7 @@ def test_present_absent_is_fixed():
         states=(state(first),),
     )
 
-    result = classify_history(history, current=None)
+    result = classify_history(history, current=None, absence_verified=True)
 
     assert result == FindingTransition(
         state="fixed",
@@ -76,7 +76,7 @@ def test_present_absent_absent_has_no_transition():
         states=(state(first), state(None)),
     )
 
-    result = classify_history(history, current=None)
+    result = classify_history(history, current=None, absence_verified=True)
 
     assert result == FindingTransition(
         state=None,

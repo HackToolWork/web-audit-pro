@@ -32,9 +32,9 @@ web-audit example.com --yes-i-am-authorized
 ```bash
 docker build -t web-audit-pro:local .
 mkdir -p reports
-docker run --rm \\
-  -u "$(id -u):$(id -g)" \\
-  -v "$PWD/reports:/app/reports" \\
+docker run --rm \
+  -u "$(id -u):$(id -g)" \
+  -v "$PWD/reports:/app/reports" \
   web-audit-pro:local example.com --yes-i-am-authorized
 ```
 
@@ -78,8 +78,10 @@ Web Audit Pro сознательно занимает промежуточное
 | CORS | Комбинации wildcard / credentials | Включено |
 | Disclosure | `Server`, `X-Powered-By` | Включено |
 | JavaScript | Поиск credential-like значений с редактированием секретов | Опционально (`--scan-js`) |
-| DNS | A/AAAA, MX, TXT, SPF, CNAME | Опционально / через config |
+| DNS | A/AAAA, MX, TXT, SPF и DMARC (оба с проверкой родительского домена), CNAME | Опционально / через config |
+| TLS-сертификат | Ошибки проверки, истечение в ближайшие 30 дней (high — в ближайшие 14) | Включено для HTTPS-целей (`--no-tls-check` отключает; пропускается при `--proxy`) |
 | CMS | Fingerprinting и advisory references | Опционально / через config |
+| WordPress | Список плагинов и тем с версиями по уже загруженному HTML (без дополнительных запросов; неоднозначные версии помечаются как неизвестные) | Вместе с определением CMS |
 | Vulnerability DB | Локальный поиск CVE/advisory | После `--update-db` |
 | Поддомены | Кандидаты из Certificate Transparency | Опционально (`--discover-subdomains`) |
 | История | Сравнение сканирований | Доступно |
@@ -100,8 +102,8 @@ web-audit example.com --yes-i-am-authorized
 ### 2. Пассивный анализ JavaScript
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --scan-js
 ```
 
@@ -110,8 +112,8 @@ JavaScript-находки не сохраняют секреты в открыт
 ### 3. Пассивный инвентарь поддоменов
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --discover-subdomains
 ```
 
@@ -128,44 +130,83 @@ web-audit --update-db
 Затем используйте её в аудите:
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --cms-vuln-lookup
 ```
 
 Обычный аудит не обращается к NVD только потому, что включено CMS-обогащение.
+
+#### Плагины и темы WordPress
+
+Версии найденных плагинов и тем WordPress можно офлайн сверить с базой уязвимостей
+[Wordfence Intelligence](https://www.wordfence.com/threat-intel/). Она бесплатна в том
+числе для коммерческого использования, но требует бесплатного API-ключа из аккаунта
+Wordfence. База скачивается явно:
+
+```bash
+export WORDFENCE_API_KEY=ваш-ключ
+web-audit --update-wp-db
+```
+
+Дальше проверки используют локальную копию без обращения к Wordfence и
+предупреждают, если ей больше семи дней. Wordfence ограничивает частоту скачиваний
+и может заблокировать ключ при постоянном превышении лимита, поэтому `--update-wp-db`
+не отправляет запрос, пока локальной копии меньше 12 часов, и в течение 12 часов
+после ответа HTTP 429. Компонент считается уязвимым, только если
+его версия определена однозначно и попадает в затронутый диапазон. В отчётах
+указываются источник данных и копирайты, которых требуют условия базы.
+Расположение базы можно изменить переменной `WEB_AUDIT_WP_VULN_DB`.
 
 ### 5. Внутренняя лаборатория
 
 Для private/loopback и других не-public targets в явно авторизованной лаборатории:
 
 ```bash
-web-audit internal.example \\
-  --yes-i-am-authorized \\
+web-audit internal.example \
+  --yes-i-am-authorized \
   --allow-private
 ```
 
 ### 6. CI gate
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --fail-on medium
 ```
 
 ### 7. Автоматически открыть HTML-отчёт
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --open
 ```
 
-### 8. Локальная web-панель
+### 8. Понятный отчёт для владельца сайта
+
+При каждом запуске создаётся `owner-report-*.html` — короткий отчёт для
+нетехнического владельца сайта: общий статус-светофор, какие области проверены,
+что изменилось с прошлой проверки и что сделать по каждой проблеме. Для своего
+брендинга используйте `--company` и `--logo`, для русского языка — `--lang ru`:
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
+  --lang ru \
+  --company "Веб-студия Пример" \
+  --logo logo.png
+```
+
+Области, которые не проверялись, так и помечаются — «не проверялось», а не «в
+порядке». Отчёт — один HTML-файл, который удобно сохранить в PDF через печать в браузере.
+
+### 9. Локальная web-панель
+
+```bash
+web-audit example.com \
+  --yes-i-am-authorized \
   --serve
 ```
 
@@ -224,6 +265,30 @@ nvd_timeout = 12.0
 
 ---
 
+## Подтверждение владения сайтом
+
+`--yes-i-am-authorized` — это только подтверждение с вашей стороны. Если вы
+проверяете сайты других людей, попросите их сначала подтвердить владение:
+
+```bash
+web-audit https://www.example.com --ownership-token --lang ru   # инструкция для клиента
+web-audit https://www.example.com --verify-ownership            # проверить подтверждение
+web-audit https://www.example.com --yes-i-am-authorized --require-ownership
+```
+
+Владелец публикует код либо TXT-записью в DNS (на домене или на
+`_webaudit.<домен>`; подтверждает домен и все поддомены), либо в файле
+`/.well-known/webaudit-verify.txt` (подтверждает только этот адрес; перенаправления
+не учитываются, внутренние адреса никогда не запрашиваются). С `--require-ownership`
+или `require_ownership = true` в `[scan]` неподтверждённые сайты не сканируются, а
+найденные поддомены вне подтверждения пропускаются. В отчёте для владельца
+указывается, как подтверждено владение.
+
+Коды — это HMAC домена на локальном секретном ключе
+`~/.config/web-audit-pro/ownership.key` (путь меняется переменной
+`WEB_AUDIT_OWNERSHIP_KEY_FILE`). Сделайте резервную копию: замена ключа делает
+недействительными все выданные коды.
+
 ## Контроль scope
 
 Контроль scope — базовая функция безопасности, а не декоративная опция.
@@ -238,8 +303,8 @@ example.com
 Запуск:
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --scope-file examples/scope.txt
 ```
 
@@ -252,16 +317,16 @@ web-audit example.com \\
 Можно передать собственный список путей:
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --paths-file examples/paths.txt
 ```
 
 На системах с подходящими security wordlists можно явно включить их поиск:
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --kali-wordlist
 ```
 
@@ -274,6 +339,7 @@ Kali-словарь не является обязательным. При ег�
 Сканер умеет создавать:
 
 - **HTML** — для людей и клиентского review;
+- **План действий в Markdown** — список задач с приоритетами, наблюдениями и затронутыми URL;
 - **JSON** — для автоматизации и сравнения сканов;
 - **CSV** — для таблиц и triage;
 - **SARIF 2.1.0** — для security tooling и CI-интеграций;
@@ -281,13 +347,93 @@ Kali-словарь не является обязательным. При ег�
 
 По умолчанию имена файлов содержат идентификатор запуска, поэтому параллельные контейнеры не перетирают друг друга.
 
+### Работа с планом действий
+
+Каждое сканирование включает план действий в HTML-отчёте и автоматически
+создаёт отдельный файл `*-actions.md`. Находки объединяются по правилу и
+сортируются по серьёзности, затем по числу уникальных затронутых URL и
+идентификатору правила. В каждой задаче сохраняются наблюдения, URL,
+рекомендация и способ повторной проверки. Находки с недостаточной уверенностью
+или неполным ответом сначала нужно подтвердить; информационные находки
+предлагается рассмотреть отдельно.
+
+Порядок помогает разбирать результаты, но не доказывает возможность
+эксплуатации или ущерб бизнесу. Ошибки запросов, неполное покрытие и повторные
+проверки со статусом `UNVERIFIED` остаются видимыми; отсутствие находок не
+подтверждает безопасность сайта.
+Отчёты содержат собранные свидетельства и URL; проверьте их перед передачей другим людям.
+
+После изменения повторите проверку тех же URL с теми же настройками и сравните
+результаты. Автоматическое подтверждение доступно только для перечисленных
+ниже правил ответа. Остальные правила требуют ручной проверки; наличие
+заголовка само по себе не подтверждает эффективность политики.
+
+Для примера без обращения к сайту выполните из корня репозитория с
+установленными зависимостями:
+
+```bash
+python -m examples.action_plan_demo --output-dir reports/action-plan-demo
+```
+
+Откройте `reports/action-plan-demo/index.html` для просмотра настоящего
+HTML-отчёта или `action-plan.md` в том же каталоге для списка задач.
+В `report.json` сохранены исходные наблюдения. Искусственный пример содержит
+отключённую HSTS, отсутствие CSP на двух URL, информационные заголовки сервера
+и таймаут, из-за которого прежняя находка остаётся неподтверждённой.
+Демонстрация не создаёт сетевых подключений.
+
 ### Сравнение двух сканов
 
 ```bash
-web-audit example.com \\
-  --yes-i-am-authorized \\
+web-audit example.com \
+  --yes-i-am-authorized \
   --compare reports/previous.json
 ```
+
+CLI и HTML-отчёт показывают изменения состояния находок. Без `--compare`
+используется история предыдущих сканирований той же цели в локальной базе.
+
+- **FIXED** — поддерживаемое правило явно пройдено при повторной проверке той же
+  цели и нормализованного URL: получен полный ответ `2xx` без ошибки запроса.
+- **UNVERIFIED** — находка отсутствует, но её исправление не подтверждено.
+  Например, URL пропущен, запрос завершился ошибкой, ответ обрезан, правило
+  исключено или нет метаданных проверки. В отчёте указана причина. Неопределённый
+  результат не подтверждает исправление и не делает следующее появление находки
+  регрессией.
+
+Подтверждение исправления сейчас доступно для девяти правил ответа:
+`headers.hsts`, `headers.hsts_disabled`, `headers.content_type_options`,
+`headers.csp`, `headers.csp_report_only`, `headers.referrer_policy`,
+`headers.clickjacking`, `cors.wildcard_credentials` и `info.stack_headers`.
+Ответ должен соответствовать условиям успешной проверки; одного исчезновения
+находки недостаточно. Отсутствие находок по cookies, содержимому ответа, DNS, TLS-сертификату,
+CMS, JavaScript или редиректам автоматически не считается исправлением.
+Пройденное правило относится к конкретному ответу в момент проверки и не
+подтверждает безопасность всего приложения.
+Для CSP и Referrer-Policy проверяется наличие непустого заголовка;
+синтаксис, допустимость значений и эффективность политики здесь не проверяются.
+В частности, FIXED для `headers.csp` означает устранение отсутствия заголовка,
+а не подтверждение корректной настройки CSP.
+
+Схема JSON **4.1** добавляет к каждому результату `verification_version` и
+`verified_rules`. Старые JSON-отчёты читаются как прежде. В SQLite добавляются
+новые столбцы с сохранением предыдущих сканирований; у старых записей нет
+метаданных проверки. Историческое отсутствие находки без этих метаданных не
+подтверждает исправление или регрессию. Сканер, локальная история, сравнение,
+экспорт отчётов и брендирование остаются бесплатными; подписка и аккаунт для
+этих возможностей не требуются.
+
+### Посмотреть повторные проверки офлайн
+
+Из корня репозитория с установленными зависимостями:
+
+```bash
+python -m examples.recheck_demo --output-dir reports/recheck-demo
+```
+
+Откройте `reports/recheck-demo/index.html`, чтобы сравнить отчёты сценариев.
+Демонстрация использует имитацию HTTP-ответов, не открывает сокеты и не сканирует
+сайты.
 
 ### SARIF в CI
 
@@ -327,9 +473,9 @@ export WEB_AUDIT_VULN_DB=/path/to/vulndb.sqlite3
 
 ```bash
 mkdir -p reports
-docker run --rm \\
-  -u "$(id -u):$(id -g)" \\
-  -v "$PWD/reports:/app/reports" \\
+docker run --rm \
+  -u "$(id -u):$(id -g)" \
+  -v "$PWD/reports:/app/reports" \
   web-audit-pro:local --help
 ```
 
@@ -375,11 +521,16 @@ web-audit-pro/
 │   ├── data/              # данные fingerprint CMS
 │   ├── scanner.py         # HTTP-движок сканирования
 │   ├── dns_audit.py       # пассивный DNS-анализ
+│   ├── tls_audit.py       # проверка и срок действия TLS-сертификата
 │   ├── js_audit.py        # пассивный JavaScript-анализ
 │   ├── cms.py             # fingerprinting CMS
+│   ├── wordpress.py       # пассивный список плагинов и тем WordPress
+│   ├── wp_vulndb.py       # офлайн-сверка с базой уязвимостей Wordfence
+│   ├── ownership.py       # подтверждение владения доменом через DNS или файл
 │   ├── vulndb.py          # локальная advisory DB
 │   ├── nvd.py             # явное обновление advisory DB
 │   ├── reports.py         # HTML/JSON/CSV
+│   ├── owner_report.py    # отчёт для владельца (тексты в owner_texts.py)
 │   ├── sarif.py           # SARIF output
 │   ├── serve.py            # read-only dashboard
 │   └── tui.py              # terminal UI

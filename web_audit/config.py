@@ -28,9 +28,11 @@ _CONFIG_VALUE_TYPES: dict[str, tuple[type, ...]] = {
     "paths": (list, tuple),
     "paths_file": (str, Path),
     "allow_private": (bool,),
+    "require_ownership": (bool,),
     "insecure_tls": (bool,),
     "user_agent_profile": (str,),
     "dns": (bool,),
+    "tls_check": (bool,),
     "cms": (bool,),
     "scan_js": (bool,),
     "max_js_files": (int,),
@@ -41,6 +43,7 @@ _CONFIG_VALUE_TYPES: dict[str, tuple[type, ...]] = {
     "tui": (bool,),
     "company": (str,),
     "theme": (str,),
+    "lang": (str,),
     "logo": (str, Path),
     "open": (bool,),
     "compare": (str, Path),
@@ -71,6 +74,7 @@ class Settings:
     json_name: str = "report.json"
     sarif_name: str = "report.sarif"
     diff_name: str = "diff.json"
+    owner_name: str = "owner-report.html"
     log_name: str = "scanner.log"
     log_max_bytes: int = 5 * 1024 * 1024
     log_backup_count: int = 5
@@ -82,10 +86,12 @@ class Settings:
     max_js_files: int = 20
     content_scan_max_size: int = 512 * 1024
     dns_enabled: bool = True
+    tls_check_enabled: bool = True
     cms_enabled: bool = True
     ua_profile: str = "stable"
     company: str = "Web Audit Pro"
     theme: str = "dark"
+    report_lang: str = "en"
     logo_path: Path | None = None
 
     def validate(self) -> None:
@@ -113,6 +119,8 @@ class Settings:
             raise ValueError("ua_profile must be stable or browser")
         if self.theme not in {"dark", "light", "cyberpunk"}:
             raise ValueError("theme must be dark, light, or cyberpunk")
+        if self.report_lang not in {"en", "ru"}:
+            raise ValueError("lang must be en or ru")
         if not self.paths:
             raise ValueError("at least one path is required")
         if any(not isinstance(path, str) or not path.strip() for path in self.paths):
@@ -135,6 +143,10 @@ class Settings:
     @property
     def sarif_path(self) -> Path:
         return self.output_dir / self.sarif_name
+
+    @property
+    def owner_path(self) -> Path:
+        return self.output_dir / self.owner_name
 
     @property
     def diff_path(self) -> Path:
@@ -177,11 +189,13 @@ def _section_map() -> dict[str, dict[str, str]]:
             "paths": "paths",
             "paths_file": "paths_file",
             "allow_private": "allow_private",
+            "require_ownership": "require_ownership",
             "insecure_tls": "insecure_tls",
             "user_agent_profile": "user_agent_profile",
         },
         "features": {
             "dns": "dns",
+            "tls_check": "tls_check",
             "cms": "cms",
             "scan_js": "scan_js",
             "max_js_files": "max_js_files",
@@ -194,6 +208,7 @@ def _section_map() -> dict[str, dict[str, str]]:
         "report": {
             "company": "company",
             "theme": "theme",
+            "lang": "lang",
             "logo": "logo",
             "open": "open",
             "compare": "compare",
@@ -266,7 +281,11 @@ def coerce_cli_types(namespace: Any) -> None:
     boolean_fields = {
         "insecure_tls",
         "allow_private",
+        "require_ownership",
+        "ownership_token",
+        "verify_ownership",
         "dns",
+        "tls_check",
         "cms",
         "scan_js",
         "discover_subdomains",
@@ -277,6 +296,7 @@ def coerce_cli_types(namespace: Any) -> None:
         "serve",
         "serve_public",
         "update_db",
+        "update_wp_db",
     }
     for key in integer_fields:
         value = getattr(namespace, key, None)

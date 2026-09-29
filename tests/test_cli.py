@@ -342,6 +342,8 @@ def test_cli_compare_renders_lifecycle_summary(monkeypatch, tmp_path, capsys):
                             recommendation="Restrict allowed origins.",
                         ),
                     ),
+                    verified_rules=("headers.referrer_policy",),
+                    verification_version=1,
                 )
             ]
 
@@ -371,6 +373,41 @@ def test_cli_compare_renders_lifecycle_summary(monkeypatch, tmp_path, capsys):
     assert "FIXED       1" in output
     assert "[NEW] cors.wildcard_credentials" in output
     assert "[FIXED] headers.referrer_policy" in output
+    html_report = next((tmp_path / "current").glob("report-*.html")).read_text(encoding="utf-8")
+    assert "[FIXED] headers.referrer_policy" in html_report
+    assert "[NEW] cors.wildcard_credentials" in html_report
+
+
+def test_failed_comparison_still_saves_current_html(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "resolve_target_addresses", lambda target: set())
+
+    class EmptyScanner:
+        def __init__(self, settings, proxy=None):
+            pass
+
+        def scan_target(self, target):
+            return []
+
+    monkeypatch.setattr(cli, "Scanner", EmptyScanner)
+    output_dir = tmp_path / "current"
+    code = cli.main(
+        [
+            "https://example.com",
+            "--yes-i-am-authorized",
+            "--paths",
+            "/",
+            "--no-dns",
+            "--no-cms",
+            "--output-dir",
+            str(output_dir),
+            "--compare",
+            str(tmp_path / "missing.json"),
+        ]
+    )
+
+    assert code == 2
+    assert "Comparison error:" in capsys.readouterr().out
+    assert len(list(output_dir.glob("report-*.html"))) == 1
 
 
 def test_cli_uses_database_history_for_regression(
@@ -430,6 +467,8 @@ def test_cli_uses_database_history_for_regression(
                     elapsed_ms=1.0,
                     scanned_at=datetime.now(UTC),
                     findings=(),
+                    verified_rules=("headers.csp",),
+                    verification_version=1,
                 )
             ],
         )

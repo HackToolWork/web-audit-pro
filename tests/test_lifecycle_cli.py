@@ -72,3 +72,24 @@ def test_render_lifecycle_summary_handles_no_changes():
 
     assert "Security changes" in output
     assert "No lifecycle changes." in output
+
+
+def test_render_lifecycle_summary_explains_unverified_findings():
+    summary = {
+        "unverified_count": 1,
+        "unverified": [
+            {
+                "rule_id": "headers.csp",
+                "url": "https://example.com/",
+                "severity": "low",
+                "reason": "This URL was not checked in the current audit.",
+            }
+        ],
+    }
+
+    output = render_lifecycle_summary(summary)
+
+    assert "UNVERIFIED  1" in output
+    assert "[UNVERIFIED] headers.csp" in output
+    assert "This URL was not checked in the current audit." in output
+    assert "No lifecycle changes." not in output

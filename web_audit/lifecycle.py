@@ -6,7 +6,7 @@ from typing import Literal
 from .identity import FindingIdentity
 from .models import Finding
 
-LifecycleState = Literal["new", "present", "fixed", "changed", "regressed"]
+LifecycleState = Literal["new", "present", "fixed", "changed", "regressed", "unverified"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,13 +28,14 @@ class TransitionResult:
 
 @dataclass(frozen=True, slots=True)
 class FindingState:
-    """The state of one logical finding during an audit.
+    """An observation or a recheck of a previously observed finding.
 
-    ``observation=None`` represents an audit in which the finding
-    was not observed.
+    An absent observation is unknown unless ``absence_verified`` is true.
+    Unknown checks do not establish either a fix or a regression.
     """
 
     observation: FindingObservation | None
+    absence_verified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,8 +57,10 @@ class FindingTransition:
 def classify_transition(
     previous: FindingObservation | None,
     current: FindingObservation | None,
+    *,
+    absence_verified: bool = False,
 ) -> TransitionResult:
-    """Classify the transition between two observations."""
+    """Classify two observations; absent findings require an explicit verified recheck."""
     if previous is None and current is None:
         raise ValueError("at least one observation is required")
 
@@ -65,7 +68,7 @@ def classify_transition(
         return TransitionResult("new", None, current)
 
     if current is None:
-        return TransitionResult("fixed", previous, None)
+        return TransitionResult("fixed" if absence_verified else "unverified", previous, None)
 
     if previous.identity != current.identity:
         return TransitionResult("new", None, current)
@@ -76,44 +79,46 @@ def classify_transition(
     return TransitionResult("present", previous, current)
 
 
-def _last_observed(
-    history: FindingHistory,
-) -> FindingObservation | None:
-    """Return the most recent observed finding from history."""
-    return next(
-        (state.observation for state in reversed(history.states) if state.observation is not None),
-        None,
-    )
-
-
 def classify_history(
     history: FindingHistory,
     current: FindingObservation | None,
+    *,
+    absence_verified: bool = False,
 ) -> FindingTransition:
-    """Classify the current audit state against finding history.
+    """Classify against the latest known state, skipping inconclusive historical checks.
 
-    ``FIXED`` represents a transition from an observed finding to an
-    absent state. Repeated absence produces no transition. A finding
-    returning after one or more absent states is ``REGRESSED``.
+    Only verified absence establishes FIXED or makes a returning finding REGRESSED.
+    An inconclusive current check is UNVERIFIED even after an earlier verified fix.
     """
     if not history.states:
         if current is None:
             raise ValueError("history has no observations")
         return FindingTransition("new", None, current)
 
-    previous = _last_observed(history)
-    was_absent = history.states[-1].observation is None
+    previous = next(
+        (state.observation for state in reversed(history.states) if state.observation is not None),
+        None,
+    )
+    last_known = next(
+        (
+            state
+            for state in reversed(history.states)
+            if state.observation is not None or state.absence_verified
+        ),
+        None,
+    )
+    was_absent = last_known is not None and last_known.observation is None
 
     if current is None:
+        if previous is None:
+            return FindingTransition(None, None, None)
+        if not absence_verified:
+            return FindingTransition("unverified", previous, None)
         if was_absent:
             return FindingTransition(None, previous, None)
-
         return FindingTransition("fixed", previous, None)
 
-    if previous is None:
-        return FindingTransition("new", None, current)
-
-    if previous.identity != current.identity:
+    if previous is None or previous.identity != current.identity:
         return FindingTransition("new", None, current)
 
     if was_absent:

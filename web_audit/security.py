@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from urllib.parse import urljoin, urlparse
 
 from .models import Confidence, Finding, Severity
+
+SUPPORTED_VERIFICATION_RULES = frozenset(
+    {
+        "headers.hsts",
+        "headers.hsts_disabled",
+        "headers.content_type_options",
+        "headers.csp",
+        "headers.csp_report_only",
+        "headers.referrer_policy",
+        "headers.clickjacking",
+        "cors.wildcard_credentials",
+        "info.stack_headers",
+    }
+)
 
 
 def _get_header(headers: Mapping[str, str], name: str) -> str:
@@ -11,6 +26,86 @@ def _get_header(headers: Mapping[str, str], name: str) -> str:
         if key.lower() == name.lower():
             return value.strip()
     return ""
+
+
+def _positive_hsts(hsts: str) -> bool:
+    directives = [part.strip().partition("=") for part in hsts.split(";")]
+    ages = [value.strip() for name, _, value in directives if name.strip().lower() == "max-age"]
+    # Repeated, zero, negative and malformed max-age values are not verification evidence.
+    return len(ages) == 1 and re.fullmatch(r'[1-9][0-9]*|"[1-9][0-9]*"', ages[0]) is not None
+
+
+def _frame_protection(frame_header: str, csp: str) -> bool:
+    # An enforcing frame-ancestors directive takes precedence over X-Frame-Options.
+    for directive in csp.split(";"):
+        tokens = directive.strip().split()
+        if not tokens or tokens[0].lower() != "frame-ancestors":
+            continue
+        sources = tokens[1:]
+        if sources == ["'none'"]:
+            return True
+        if not sources:
+            return False
+        for source in sources:
+            if source == "'self'":
+                continue
+            # Verify a conservative subset of explicit HTTP(S) ancestor allowlists.
+            # Broad scheme sources, '*' and ambiguous declarations remain unverified.
+            try:
+                parsed = urlparse(source)
+                port = parsed.port
+            except ValueError:
+                return False
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.hostname == "*"
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                or "," in source
+                or (port is not None and not 0 < port < 65536)
+            ):
+                return False
+        return True
+    return frame_header.upper() in {"DENY", "SAMEORIGIN"}
+
+
+def verified_response_rules(
+    *, url: str, status: int | None, headers: Mapping[str, str]
+) -> tuple[str, ...]:
+    """Return selected conditions positively verified on a successful HTTP response.
+
+    These rules describe this response only, not the safety of a site. The caller
+    must additionally ensure the response completed without errors or truncation.
+    Unsupported rules remain unverified even when they produce no findings.
+    """
+    if status is None or not 200 <= status < 300:
+        return ()
+    passed: set[str] = set()
+    if urlparse(url).scheme.lower() == "https" and _positive_hsts(
+        _get_header(headers, "Strict-Transport-Security")
+    ):
+        passed.update({"headers.hsts", "headers.hsts_disabled"})
+    if _get_header(headers, "X-Content-Type-Options").lower() == "nosniff":
+        passed.add("headers.content_type_options")
+    if _get_header(headers, "Referrer-Policy"):
+        passed.add("headers.referrer_policy")
+    if _get_header(headers, "Content-Type").split(";", 1)[0].strip().lower() == "text/html":
+        csp = _get_header(headers, "Content-Security-Policy")
+        if csp:
+            passed.update({"headers.csp", "headers.csp_report_only"})
+        if _frame_protection(_get_header(headers, "X-Frame-Options"), csp):
+            passed.add("headers.clickjacking")
+    if not (
+        _get_header(headers, "Access-Control-Allow-Origin") == "*"
+        and _get_header(headers, "Access-Control-Allow-Credentials").lower() == "true"
+    ):
+        passed.add("cors.wildcard_credentials")
+    if not _get_header(headers, "Server") and not _get_header(headers, "X-Powered-By"):
+        passed.add("info.stack_headers")
+    return tuple(sorted(passed))
 
 
 def _cookie_headers(headers: Mapping[str, str], raw_headers: object | None) -> list[str]:

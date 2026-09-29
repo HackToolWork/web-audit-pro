@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -9,10 +10,12 @@ import subprocess
 import sys
 import uuid
 import webbrowser
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from . import PROJECT_NAME, __version__
+from . import PROJECT_NAME, __version__, ownership, wp_vulndb
 from .config import Settings, apply_cli_config, coerce_cli_types
 from .database import Database
 from .diffing import compare_reports, load_report, save_diff
@@ -21,13 +24,18 @@ from .dns_audit import inspect_domain
 from .lifecycle_cli import render_lifecycle_summary
 from .lifecycle_reporting import summarize_lifecycle, summarize_lifecycle_history
 from .logging import configure_logging, console_print, paint
-from .reports import save_csv, save_html, save_json, summary
+from .owner_report import save_owner_report
+from .ownership import OwnershipProof
+from .reports import save_action_plan, save_csv, save_html, save_json, summary
 from .sarif import save_sarif
 from .scanner import Scanner
 from .scope import load_scope, target_in_scope
 from .serve import generate_token, run_server
 from .subdomains import discover_from_crtsh
+from .tls_audit import findings as tls_findings
+from .tls_audit import inspect_certificate
 from .utils import is_non_public_address, normalize_target, resolve_target_addresses
+from .wordpress import parse_evidence as parse_wordpress_evidence
 
 logger = logging.getLogger(__name__)
 _SEVERITY_ORDER = {"none": 99, "info": 0, "low": 1, "medium": 2, "high": 3}
@@ -45,6 +53,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Refresh the local CMS advisory database from NVD and exit",
+    )
+    parser.add_argument(
+        "--update-wp-db",
+        action="store_true",
+        default=None,
+        help=(
+            "Download the Wordfence Intelligence WordPress vulnerability feed "
+            "(needs WORDFENCE_API_KEY) for offline plugin/theme checks, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--ownership-token",
+        action="store_true",
+        default=None,
+        help="Print DNS/file ownership verification instructions for the target and exit",
+    )
+    parser.add_argument(
+        "--verify-ownership",
+        action="store_true",
+        default=None,
+        help="Check whether the target's ownership token is published and exit",
+    )
+    parser.add_argument(
+        "--require-ownership",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Refuse to scan unless ownership of the target is verified (default: off)",
     )
     parser.add_argument(
         "-t",
@@ -113,6 +148,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Run passive DNS checks (default: on)",
+    )
+    parser.add_argument(
+        "--tls-check",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Check TLS certificate validity and expiry for HTTPS targets (default: on)",
     )
     parser.add_argument(
         "--cms",
@@ -197,6 +238,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--logo", type=Path, help="Optional PNG/JPEG logo embedded in HTML")
     parser.add_argument(
+        "--lang",
+        choices=("en", "ru"),
+        default=None,
+        help="Language of the plain-language owner report (default: en)",
+    )
+    parser.add_argument(
         "--user-agent-profile",
         choices=("stable", "browser"),
         default=None,
@@ -232,6 +279,71 @@ def _print_result(result) -> None:
     for finding in result.findings:
         label = f"    [{finding.severity.upper()}] {finding.title} ({finding.rule_id})"
         console_print(paint(label, "35"))
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _attach_to_primary(results: list, target: str, extra: tuple) -> list:
+    """Attach target-level findings (DNS, TLS) to the result for the target root."""
+    if not extra or not results:
+        return results
+    primary = next((r for r in results if r.url in {target, target + "/"}), results[0])
+    updated = replace(primary, findings=(*primary.findings, *extra))
+    return [updated if r is primary else r for r in results]
+
+
+def _verify_ownership(args: argparse.Namespace, target: str) -> OwnershipProof:
+    return ownership.verify(
+        target,
+        timeout=args.timeout,
+        verify_tls=not args.insecure_tls,
+        proxies={"http": args.proxy, "https": args.proxy} if args.proxy else None,
+        allow_private=bool(args.allow_private),
+    )
+
+
+def _match_wordpress_vulnerabilities(results: list) -> tuple[list, str | None]:
+    """Add offline vulnerability findings for WordPress components with known versions.
+
+    Returns the updated results and the local database date when a check ran.
+    """
+    components = [
+        (index, parsed)
+        for index, result in enumerate(results)
+        for finding in result.findings
+        if finding.rule_id.startswith(("wordpress.plugin.", "wordpress.theme."))
+        and (parsed := parse_wordpress_evidence(finding.evidence))
+    ]
+    if not components:
+        return results, None
+    db_path = wp_vulndb.default_path()
+    db = wp_vulndb.load(db_path)
+    if db is None:
+        console_print(
+            "[i] WordPress components found; run `web-audit --update-wp-db` to check them "
+            "for known vulnerabilities."
+        )
+        return results, None
+    if db.age_days > wp_vulndb.STALE_AFTER_DAYS:
+        console_print(
+            f"[i] WordPress vulnerability database is {int(db.age_days)} days old; "
+            "run `web-audit --update-wp-db`."
+        )
+    updated = list(results)
+    for index, (kind, slug, version) in components:
+        if version is None:
+            continue
+        extra = wp_vulndb.component_findings(kind, slug, version, db)
+        if extra:
+            result = updated[index]
+            updated[index] = replace(result, findings=(*result.findings, *extra))
+    return updated, datetime.fromtimestamp(db.updated_at, UTC).strftime("%Y-%m-%d")
 
 
 def _meets_threshold(results, threshold: str) -> bool:
@@ -344,6 +456,7 @@ def _run_output_paths(settings: Settings, target: str, started: datetime) -> Non
         "json_name": f"report-{suffix}.json",
         "sarif_name": f"report-{suffix}.sarif",
         "diff_name": f"diff-{suffix}.json",
+        "owner_name": f"owner-report-{suffix}.html",
         "log_name": f"scanner-{suffix}.log",
     }
     for attr, value in defaults.items():
@@ -362,6 +475,7 @@ _BUILTIN_DEFAULTS = {
     "insecure_tls": False,
     "allow_private": False,
     "dns": True,
+    "tls_check": True,
     "cms": True,
     "scan_js": True,
     "max_js_files": 20,
@@ -379,6 +493,7 @@ _BUILTIN_DEFAULTS = {
     "serve_public": False,
     "company": "Web Audit Pro",
     "theme": "dark",
+    "lang": "en",
     "logo": None,
     "user_agent_profile": "stable",
     "fail_on": "none",
@@ -388,6 +503,10 @@ _BUILTIN_DEFAULTS = {
     "paths_file": None,
     "config": None,
     "update_db": False,
+    "update_wp_db": False,
+    "ownership_token": False,
+    "verify_ownership": False,
+    "require_ownership": False,
 }
 
 
@@ -432,9 +551,48 @@ def main(argv: list[str] | None = None) -> int:
         console_print(f"[i] Database: {db_path}")
         return 0
 
+    if args.update_wp_db:
+        db_path = wp_vulndb.default_path()
+        wait_hours = wp_vulndb.hours_until_refresh_allowed(db_path)
+        if wait_hours > 0:
+            console_print(
+                f"[i] The WordPress vulnerability database is fresh; Wordfence rate-limits "
+                f"downloads, so try again in {wait_hours:.1f} hour(s). Database: {db_path}"
+            )
+            return 0
+        try:
+            records = wp_vulndb.update(db_path)
+        except Exception as exc:
+            console_print(f"WordPress vulnerability DB update failed: {type(exc).__name__}: {exc}")
+            console_print("[i] The existing local database, if any, was kept.")
+            return 1
+        console_print(f"[+] WordPress vulnerability database updated: {records} records")
+        console_print(f"[i] Source: {wp_vulndb.SOURCE}; database: {db_path}")
+        return 0
+
     if not args.target:
-        console_print("Target is required unless --update-db is used.")
+        console_print("Target is required unless --update-db or --update-wp-db is used.")
         return 2
+
+    if args.ownership_token or args.verify_ownership:
+        target = normalize_target(args.target)
+        if not target:
+            console_print("Invalid target URL.")
+            return 2
+        if args.ownership_token:
+            console_print(ownership.instructions(target, lang=args.lang))
+            console_print(
+                f"\n[i] Tokens are signed with {ownership.key_path()}; keep this file, "
+                "because replacing it invalidates every token already issued."
+            )
+            return 0
+        proof = _verify_ownership(args, target)
+        if proof.verified:
+            console_print(f"[+] Ownership verified for {proof.domain} via {proof.detail}.")
+            return 0
+        console_print(f"[!] Ownership not verified: {proof.detail}")
+        console_print("[i] Run with --ownership-token for instructions.")
+        return 1
 
     if not args.company.strip():
         console_print("[i] Empty --company value; using the default company name: Web Audit Pro.")
@@ -484,12 +642,14 @@ def main(argv: list[str] | None = None) -> int:
         requests_per_second=args.requests_per_second,
         scope_file=args.scope_file,
         dns_enabled=args.dns,
+        tls_check_enabled=args.tls_check,
         cms_enabled=args.cms,
         scan_js=args.scan_js,
         max_js_files=args.max_js_files,
         content_scan_max_size=args.content_scan_max_size,
         company=args.company,
         theme=args.theme,
+        report_lang=args.lang,
         logo_path=args.logo,
         ua_profile=args.user_agent_profile,
     )
@@ -523,6 +683,17 @@ def main(argv: list[str] | None = None) -> int:
         console_print(f"Configuration/scope error: {exc}")
         return 2
 
+    proof: OwnershipProof | None = None
+    if args.require_ownership:
+        proof = _verify_ownership(args, target)
+        if not proof.verified:
+            console_print(
+                f"Refusing to scan: ownership of {urlparse(target).hostname} is not verified. "
+                f"{proof.detail} Run with --ownership-token for instructions."
+            )
+            return 2
+        console_print(f"[+] Ownership verified for {proof.domain} via {proof.detail}.")
+
     logger.info("Scan started target=%s addresses=%s", target, sorted(map(str, addresses)))
 
     console_print(paint(f"[*] Target: {target}", "36;1"))
@@ -531,8 +702,6 @@ def main(argv: list[str] | None = None) -> int:
     scanner = Scanner(settings=settings, proxy=args.proxy)
     targets = [target]
     if args.discover_subdomains:
-        from urllib.parse import urlparse
-
         domain = urlparse(target).hostname or ""
         try:
             discovered = discover_from_crtsh(domain)
@@ -556,6 +725,9 @@ def main(argv: list[str] | None = None) -> int:
                             safe_targets.append(candidate)
                 except ValueError:
                     continue
+            if proof is not None:
+                # Only hosts the proof covers: a token file proves one host, DNS the zone.
+                safe_targets = [t for t in safe_targets if proof.covers(urlparse(t).hostname or "")]
             targets = safe_targets
             if target not in targets:
                 targets.insert(0, target)
@@ -580,32 +752,51 @@ def main(argv: list[str] | None = None) -> int:
         results = []
         for discovered_target in targets:
             results.extend(scanner.scan_target(discovered_target))
-    if settings.dns_enabled:
-        from dataclasses import replace
-        from urllib.parse import urlparse
-
-        host = urlparse(target).hostname
-        if host and not any(ch.isdigit() for ch in host):
+    parsed_target = urlparse(target)
+    host = parsed_target.hostname or ""
+    host_is_domain = bool(host) and not _is_ip_literal(host)
+    # Which optional checks actually completed, for the owner report. Anything not
+    # recorded as "checked" is shown as unchecked rather than as passing.
+    coverage = {
+        "cms": "checked" if settings.cms_enabled else "not_checked",
+        "js": "checked" if settings.scan_js else "not_checked",
+        "email": "not_checked",
+        "tls": "not_checked",
+    }
+    if settings.dns_enabled and host_is_domain:
+        try:
+            results = _attach_to_primary(results, target, dns_findings(inspect_domain(host)))
+            coverage["email"] = "checked"
+        except Exception as exc:
+            coverage["email"] = "failed"
+            console_print(f"DNS warning: {type(exc).__name__}: {exc}")
+    if settings.tls_check_enabled and host and parsed_target.scheme == "https":
+        if args.proxy:
+            console_print("[i] TLS certificate check skipped: a proxy is configured.")
+        else:
             try:
-                dns_report = inspect_domain(host)
-                dns_extra = dns_findings(dns_report)
-                if dns_extra and results:
-                    primary = next(
-                        (r for r in results if r.url == target or r.url == target + "/"),
-                        results[0],
-                    )
-                    updated = replace(primary, findings=tuple((*primary.findings, *dns_extra)))
-                    results = [updated if r is primary else r for r in results]
+                certificate = inspect_certificate(
+                    host, parsed_target.port or 443, timeout=settings.timeout
+                )
+                if certificate.connect_error:
+                    coverage["tls"] = "failed"
+                    console_print(f"TLS warning: {certificate.connect_error}")
+                else:
+                    coverage["tls"] = "checked"
+                results = _attach_to_primary(results, target, tls_findings(certificate))
             except Exception as exc:
-                console_print(f"DNS warning: {type(exc).__name__}: {exc}")
+                coverage["tls"] = "failed"
+                console_print(f"TLS warning: {type(exc).__name__}: {exc}")
+    wp_db_date = None
+    if settings.cms_enabled:
+        results, wp_db_date = _match_wordpress_vulnerabilities(results)
     if args.ignore_rule:
-        from dataclasses import replace
-
         ignored = set(args.ignore_rule)
         results = [
             replace(
                 result,
                 findings=tuple(f for f in result.findings if f.rule_id not in ignored),
+                verified_rules=tuple(rule for rule in result.verified_rules if rule not in ignored),
             )
             for result in results
         ]
@@ -650,16 +841,10 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps(dict(enriched), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-    save_html(
-        target,
-        results,
-        settings.html_path,
-        company=settings.company,
-        theme=settings.theme,
-        logo_path=settings.logo_path,
-    )
     save_json(target, results, settings.json_path)
     save_sarif(results, settings.sarif_path)
+    lifecycle = None
+    comparison_failed = False
     if args.compare:
         try:
             previous_report = load_report(args.compare)
@@ -677,10 +862,39 @@ def main(argv: list[str] | None = None) -> int:
             console_print(render_lifecycle_summary(lifecycle))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             console_print(f"Comparison error: {exc}")
-            return 2
+            comparison_failed = True
     elif len(scan_history) >= 2:
         lifecycle = summarize_lifecycle_history(scan_history)
         console_print(render_lifecycle_summary(lifecycle))
+
+    save_html(
+        target,
+        results,
+        settings.html_path,
+        company=settings.company,
+        theme=settings.theme,
+        logo_path=settings.logo_path,
+        lifecycle=lifecycle,
+    )
+    action_plan_path = settings.json_path.with_name(f"{settings.json_path.stem}-actions.md")
+    save_action_plan(target, results, action_plan_path, lifecycle=lifecycle)
+    save_owner_report(
+        target,
+        results,
+        settings.owner_path,
+        lang=settings.report_lang,
+        company=settings.company,
+        logo_path=settings.logo_path,
+        coverage=coverage,
+        lifecycle=lifecycle,
+        wp_vulns_checked_on=wp_db_date,
+        ownership=proof,
+    )
+    if comparison_failed:
+        console_print(f"HTML: {settings.html_path}")
+        console_print(f"PLAN: {action_plan_path}")
+        console_print(f"OWNER: {settings.owner_path}")
+        return 2
 
     for result in results:
         _print_result(result)
@@ -698,6 +912,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     console_print(f"CSV : {settings.csv_path}")
     console_print(f"HTML: {settings.html_path}")
+    console_print(f"PLAN: {action_plan_path}")
+    console_print(f"OWNER: {settings.owner_path}")
     console_print(f"JSON: {settings.json_path}")
     console_print(f"SARIF: {settings.sarif_path}")
     console_print(f"DB  : {settings.db_path}")
