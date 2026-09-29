@@ -24,3 +24,17 @@ def test_real_magento_and_prestashop_markup_is_detected():
     prestashop = '<script>var prestashop = {};</script><link href="/modules/ps_shoppingcart/a.css">'
     assert _products(magento) == {"Magento"}
     assert _products(prestashop) == {"PrestaShop"}
+
+
+def test_marketing_copy_naming_platforms_is_not_a_detection():
+    body = (
+        "<h1>Проверка безопасности сайта</h1><p>Проверяем плагины WordPress, сайты на "
+        "Joomla! и Drupal, блоги на Ghost (ghost.org), магазины на Magento и PrestaShop.</p>"
+    )
+    assert _products(body) == set()
+
+
+def test_generator_meta_still_detects_platforms():
+    assert _products('<meta name="generator" content="WordPress 6.4.3">') == {"WordPress"}
+    assert _products('<meta name="generator" content="Joomla! - Open Source">') == {"Joomla"}
+    assert _products('<meta name="generator" content="Ghost 5.80">') == {"Ghost"}

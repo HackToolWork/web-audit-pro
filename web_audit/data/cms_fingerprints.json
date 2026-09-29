@@ -5,7 +5,8 @@
     "body_markers": [
       "wp-content/",
       "wp-includes/",
-      "wordpress"
+      "/wp-json/",
+      "name=\"generator\" content=\"wordpress"
     ],
     "header_markers": {
       "Link": "api.w.org"
@@ -30,8 +31,8 @@
     "min_score": 1,
     "body_markers": [
       "/media/system/js/",
-      "joomla!",
-      "com_content"
+      "com_content",
+      "name=\"generator\" content=\"joomla!"
     ],
     "header_markers": {},
     "advisory_url": "https://developer.joomla.org/security-centre.html"
@@ -65,9 +66,10 @@
     "product": "Ghost",
     "min_score": 1,
     "body_markers": [
-      "ghost.org",
       "content/ghost/",
-      "ghost-head"
+      "/ghost/api/",
+      "data-ghost",
+      "name=\"generator\" content=\"ghost"
     ],
     "header_markers": {},
     "advisory_url": "https://ghost.org/security/"

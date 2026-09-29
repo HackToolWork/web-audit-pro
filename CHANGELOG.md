@@ -8,6 +8,9 @@
 - Fixed false Magento and PrestaShop detections on WordPress sites (`image/`
   matched `mage/`, and `/wp-content/themes/` matched `/themes/`); both now need
   two platform-specific markers.
+- Fixed CMS detections triggered by merely naming a platform in page text
+  ("WordPress", "Joomla!", "ghost.org"); fingerprints now rely on asset paths,
+  markup attributes and the generator meta tag.
 - SPF/DMARC checks are skipped for single-label hosts such as `localhost`.
 - The owner report no longer shows "no serious issues" when WordPress plugins
   were not checked against a vulnerability database or a TLS/email check
