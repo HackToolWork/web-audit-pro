@@ -25,3 +25,7 @@ def _isolated_local_state(monkeypatch, tmp_path_factory):
         "WEB_AUDIT_OWNERSHIP_KEY_FILE", str(tmp_path_factory.mktemp("ownership") / "ownership.key")
     )
     monkeypatch.delenv("WORDFENCE_API_KEY", raising=False)
+    # The report language defaults to the system locale; keep tests locale-independent.
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)

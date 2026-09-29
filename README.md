@@ -12,7 +12,7 @@
 
 It combines deterministic HTTP checks, passive DNS and JavaScript analysis, CMS fingerprinting, local vulnerability enrichment, scope enforcement, rate limiting, scan history, reproducible reports, SARIF output, an optional TUI, and a local read-only dashboard.
 
-**Use it only on systems you own or are explicitly authorized to assess.** The authorization flag is an acknowledgement, not legal permission.
+**Use it only on systems you own or are explicitly authorized to assess.** The authorization flag is an acknowledgement, not legal permission. Without it, an interactive run asks for confirmation; scripts and CI must pass `--yes-i-am-authorized`.
 
 ---
 
@@ -188,7 +188,8 @@ web-audit example.com \
 Every run also writes `owner-report-*.html`: a short report for non-technical site
 owners with a traffic-light status, which areas were checked, what changed since the
 previous scan, and what to do for each issue. Use `--company` and `--logo` for your
-own branding and `--lang ru` for Russian:
+own branding. The language follows the system locale (Russian on a Russian
+system); `--lang en|ru` overrides it:
 
 ```bash
 web-audit example.com \

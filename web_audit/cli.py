@@ -241,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--lang",
         choices=("en", "ru"),
         default=None,
-        help="Language of the plain-language owner report (default: en)",
+        help="Language of the plain-language owner report (default: from the system locale)",
     )
     parser.add_argument(
         "--user-agent-profile",
@@ -493,7 +493,6 @@ _BUILTIN_DEFAULTS = {
     "serve_public": False,
     "company": "Web Audit Pro",
     "theme": "dark",
-    "lang": "en",
     "logo": None,
     "user_agent_profile": "stable",
     "fail_on": "none",
@@ -510,6 +509,33 @@ _BUILTIN_DEFAULTS = {
 }
 
 
+def _system_lang() -> str:
+    """Report language from the locale (LC_ALL > LC_MESSAGES > LANG): ru or en."""
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.getenv(name, "").strip()
+        if value:
+            return "ru" if value.lower().startswith("ru") else "en"
+    return "en"
+
+
+_AUTHORIZATION_PROMPT = {
+    "en": "Do you own {host} or have permission to test it? [y/N]: ",
+    "ru": "Вы владелец сайта {host} или у вас есть разрешение на его проверку? [y/N]: ",
+}
+
+
+def _confirm_authorization(target: str, lang: str) -> bool:
+    """Ask interactively; non-interactive runs still require --yes-i-am-authorized."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    host = urlparse(normalize_target(target) or target).hostname or target
+    try:
+        answer = input(_AUTHORIZATION_PROMPT[lang].format(host=host))
+    except EOFError:
+        return False
+    return answer.strip().lower() in {"y", "yes", "д", "да"}
+
+
 def _prepare_args(args: argparse.Namespace) -> tuple[argparse.Namespace, Path | None]:
     config_path = apply_cli_config(args, args.config)
     for key, default in _BUILTIN_DEFAULTS.items():
@@ -517,6 +543,8 @@ def _prepare_args(args: argparse.Namespace) -> tuple[argparse.Namespace, Path | 
             setattr(args, key, default)
     if args.ignore_rule is None:
         args.ignore_rule = []
+    if args.lang is None:
+        args.lang = _system_lang()
     coerce_cli_types(args)
     for attr in ("scope_file", "output_dir", "paths_file", "compare", "logo"):
         value = getattr(args, attr, None)
@@ -598,7 +626,7 @@ def main(argv: list[str] | None = None) -> int:
         console_print("[i] Empty --company value; using the default company name: Web Audit Pro.")
         args.company = "Web Audit Pro"
 
-    if not args.yes_i_am_authorized:
+    if not args.yes_i_am_authorized and not _confirm_authorization(args.target, args.lang):
         console_print(
             "Refusing to scan without authorization confirmation. "
             "Use --yes-i-am-authorized for systems you are permitted to test."
