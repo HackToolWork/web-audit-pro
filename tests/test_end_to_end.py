@@ -5,6 +5,7 @@ findings by hand and missed a CMS finding that could not be stored.
 """
 
 import json
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -28,7 +29,8 @@ class _Raw:
 class _Response:
     def __init__(self, url):
         self.url = url
-        is_home = url.rstrip("/").endswith("example.com")
+        parts = urlsplit(url)
+        is_home = parts.hostname == "example.com" and parts.path in {"", "/"}
         self.status_code = 200 if is_home else 404
         self.body = WORDPRESS_HOME if is_home else b"not found"
         self.headers = requests.structures.CaseInsensitiveDict(
