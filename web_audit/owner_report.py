@@ -92,7 +92,9 @@ def build_owner_summary(
                 "title": title,
                 "why": why,
                 "todo": todo,
-                "needs_validation": task["next_step"] == "validate",
+                # One confident observation confirms the issue; incomplete responses
+                # elsewhere (redirects, errors) must not cast doubt on it.
+                "needs_validation": "high" not in task["confidences"],
                 "urls": task["urls"],
                 "evidence": sorted({o["evidence"] for o in task["observations"]}),
             }
@@ -143,6 +145,17 @@ def build_owner_summary(
     else:
         status = "green"
 
+    # Never present an incomplete check as "all good": plugin vulnerabilities are the
+    # main risk for WordPress sites, and failed checks prove nothing either way.
+    notices = []
+    has_components = any(item["rule_id"] == "wordpress.components" for item in items)
+    if has_components and not wp_vulns_checked_on:
+        notices.append(UI[lang]["notice_wp_unchecked"])
+    if any(areas[area] == "failed" for area in ("tls", "email")):
+        notices.append(UI[lang]["notice_failed_checks"])
+    if status == "green" and notices:
+        status = "incomplete"
+
     changes = None
     if lifecycle is not None:
         changes = {}
@@ -172,6 +185,7 @@ def build_owner_summary(
         "areas": areas,
         "area_notes": {"cms": _cms_notes(items, lang)},
         "area_descriptions": area_descriptions,
+        "notices": notices,
         "items": items,
         "changes": changes,
         "attribution": list(dict.fromkeys(attribution)),
@@ -244,7 +258,9 @@ margin:12px 0}
 .status .dot{width:44px;height:44px;border-radius:50%;background:var(--c);flex:none}
 .status h2{margin:0 0 4px;color:var(--c)}
 .status p{margin:0}
-.red{--c:var(--red)}.yellow{--c:var(--yellow)}.green{--c:var(--green)}.unknown{--c:var(--grey)}
+.red{--c:var(--red)}.yellow{--c:var(--yellow)}.green{--c:var(--green)}
+.unknown,.incomplete{--c:var(--grey)}
+.status p.notice{margin-top:8px;font-weight:600}
 .areas{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
 .areas .card{margin:0}
 .pill{display:inline-block;padding:2px 10px;border-radius:10px;font-size:13px;font-weight:600;
@@ -341,6 +357,7 @@ def render_owner_report_html(
         )
         item_cards.append("".join(parts))
     attribution = "".join(f"<p>{esc(line)}</p>" for line in data["attribution"])
+    notices_html = "".join(f'<p class="notice">{esc(line)}</p>' for line in data["notices"])
     ownership_html = ""
     if data.get("ownership"):
         method = ui["ownership_" + data["ownership"]["method"]]
@@ -357,7 +374,8 @@ def render_owner_report_html(
 <div class="meta">{esc(target)} · {esc(ui["checked_on"])}: {generated:%Y-%m-%d}
  · {esc(ui["prepared_by"])}: {esc(company)}{ownership_html}</div></div>{logo_html}</header>
 <div class="card status {status}"><div class="dot"></div><div>
-<h2>{esc(ui["status_" + status])}</h2><p>{esc(ui["status_" + status + "_text"])}</p></div></div>
+<h2>{esc(ui["status_" + status])}</h2><p>{esc(ui["status_" + status + "_text"])}</p>
+{notices_html}</div></div>
 <h2>{esc(ui["areas"])}</h2><div class="areas">{"".join(area_cards)}</div>
 {changes_html}
 <h2>{esc(ui["actions"])}</h2>{actions_html}

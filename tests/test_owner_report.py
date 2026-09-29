@@ -213,3 +213,49 @@ def test_config_rejects_unknown_language(tmp_path, capsys):
     )
     assert code == 2
     assert "lang must be en or ru" in capsys.readouterr().out
+
+
+def _wordpress_result(*extra):
+    from web_audit.wordpress import Component
+    from web_audit.wordpress import findings as wordpress_findings
+
+    components = wordpress_findings((Component("plugin", "contact-form-7", "5.3.1", "a"),))
+    return _result(*components, *extra)
+
+
+def test_unchecked_plugins_never_read_as_all_good():
+    data = build_owner_summary([_wordpress_result()], coverage=ALL_CHECKED, lang="ru")
+    assert data["status"] == "incomplete"
+    assert data["notices"] == [UI["ru"]["notice_wp_unchecked"]]
+    page = render_owner_report_html("https://example.com", data, company="Studio")
+    assert UI["ru"]["status_incomplete"] in page
+    assert UI["ru"]["status_green"] not in page
+
+
+def test_checked_plugins_allow_green():
+    data = build_owner_summary(
+        [_wordpress_result()], coverage=ALL_CHECKED, wp_vulns_checked_on="2026-09-29"
+    )
+    assert data["status"] == "green"
+    assert data["notices"] == []
+
+
+def test_notice_stays_visible_with_other_statuses():
+    data = build_owner_summary(
+        [_wordpress_result(_finding("tls.certificate_expired", "high"))], coverage=ALL_CHECKED
+    )
+    assert data["status"] == "red"
+    assert data["notices"] == [UI["en"]["notice_wp_unchecked"]]
+
+
+def test_failed_checks_make_the_result_incomplete():
+    data = build_owner_summary([_result()], coverage={**ALL_CHECKED, "tls": "failed"})
+    assert data["status"] == "incomplete"
+    assert data["notices"] == [UI["en"]["notice_failed_checks"]]
+
+
+def test_confident_finding_is_not_doubted_because_of_redirects():
+    finding = _finding("headers.csp", "low")
+    results = [_result(finding), _result(finding, status=301, url="https://example.com/old")]
+    (item,) = build_owner_summary(results, coverage=ALL_CHECKED)["items"]
+    assert item["needs_validation"] is False

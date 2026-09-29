@@ -471,6 +471,13 @@ UI: dict[str, dict[str, str]] = {
         "Ниже — рекомендации для дополнительной защиты.",
         "status_unknown_text": "Главная страница не ответила корректно, поэтому часть проверок "
         "не выполнена. Результаты ниже неполные.",
+        "status_incomplete": "Явных проблем не найдено, но проверка неполная",
+        "status_incomplete_text": "Часть важных проверок не выполнена, поэтому нельзя сказать, "
+        "что с сайтом всё в порядке.",
+        "notice_wp_unchecked": "Плагины и темы WordPress не сверены с базой известных "
+        "уязвимостей — а именно через них чаще всего взламывают сайты.",
+        "notice_failed_checks": "Проверку SSL-сертификата или защиты почты не удалось выполнить "
+        "(см. «Что проверено»).",
         "areas": "Что проверено",
         "area_ok": "В порядке",
         "area_urgent": "Срочно",
@@ -547,6 +554,13 @@ UI: dict[str, dict[str, str]] = {
         "status_yellow_text": "Nothing critical, but some settings should be fixed soon.",
         "status_green_text": "The automated check found no serious problems. "
         "Below are recommendations for extra protection.",
+        "status_incomplete": "No obvious issues, but the check is incomplete",
+        "status_incomplete_text": "Some important checks did not run, so the site cannot be "
+        "called safe.",
+        "notice_wp_unchecked": "WordPress plugins and themes were not checked against a "
+        "vulnerability database — and that is how most sites get hacked.",
+        "notice_failed_checks": "The SSL certificate or email protection check could not run "
+        "(see 'What was checked').",
         "status_unknown_text": "The home page did not respond correctly, so some checks did not "
         "run. The results below are incomplete.",
         "areas": "What was checked",
