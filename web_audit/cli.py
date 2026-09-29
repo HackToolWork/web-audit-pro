@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import ipaddress
 import json
 import logging
 import os
@@ -10,16 +9,15 @@ import subprocess
 import sys
 import uuid
 import webbrowser
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from . import PROJECT_NAME, __version__, ownership, wp_vulndb
+from .audit import run_audit
 from .config import Settings, apply_cli_config, coerce_cli_types
 from .database import Database
 from .diffing import compare_reports, load_report, save_diff
-from .dns_audit import findings as dns_findings
 from .dns_audit import inspect_domain
 from .i18n import SEVERITY_LABELS, message
 from .lifecycle_cli import render_lifecycle_summary
@@ -34,10 +32,8 @@ from .scanner import Scanner
 from .scope import load_scope, target_in_scope
 from .serve import generate_token, run_server
 from .subdomains import discover_from_crtsh
-from .tls_audit import findings as tls_findings
 from .tls_audit import inspect_certificate
 from .utils import is_non_public_address, normalize_target, resolve_target_addresses
-from .wordpress import parse_evidence as parse_wordpress_evidence
 
 logger = logging.getLogger(__name__)
 _SEVERITY_ORDER = {"none": 99, "info": 0, "low": 1, "medium": 2, "high": 3}
@@ -289,23 +285,6 @@ def _print_result(result, lang: str = "en") -> None:
         console_print(paint(f"    [{severity}] {title} ({finding.rule_id})", "35"))
 
 
-def _is_ip_literal(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return True
-
-
-def _attach_to_primary(results: list, target: str, extra: tuple) -> list:
-    """Attach target-level findings (DNS, TLS) to the result for the target root."""
-    if not extra or not results:
-        return results
-    primary = next((r for r in results if r.url in {target, target + "/"}), results[0])
-    updated = replace(primary, findings=(*primary.findings, *extra))
-    return [updated if r is primary else r for r in results]
-
-
 def _verify_ownership(args: argparse.Namespace, target: str) -> OwnershipProof:
     return ownership.verify(
         target,
@@ -314,38 +293,6 @@ def _verify_ownership(args: argparse.Namespace, target: str) -> OwnershipProof:
         proxies={"http": args.proxy, "https": args.proxy} if args.proxy else None,
         allow_private=bool(args.allow_private),
     )
-
-
-def _match_wordpress_vulnerabilities(results: list, lang: str = "en") -> tuple[list, str | None]:
-    """Add offline vulnerability findings for WordPress components with known versions.
-
-    Returns the updated results and the local database date when a check ran.
-    """
-    components = [
-        (index, parsed)
-        for index, result in enumerate(results)
-        for finding in result.findings
-        if finding.rule_id.startswith(("wordpress.plugin.", "wordpress.theme."))
-        and (parsed := parse_wordpress_evidence(finding.evidence))
-    ]
-    if not components:
-        return results, None
-    db_path = wp_vulndb.default_path()
-    db = wp_vulndb.load(db_path)
-    if db is None:
-        console_print(message(lang, "wp_db_missing"))
-        return results, None
-    if db.age_days > wp_vulndb.STALE_AFTER_DAYS:
-        console_print(message(lang, "wp_db_stale", days=int(db.age_days)))
-    updated = list(results)
-    for index, (kind, slug, version) in components:
-        if version is None:
-            continue
-        extra = wp_vulndb.component_findings(kind, slug, version, db)
-        if extra:
-            result = updated[index]
-            updated[index] = replace(result, findings=(*result.findings, *extra))
-    return updated, datetime.fromtimestamp(db.updated_at, UTC).strftime("%Y-%m-%d")
 
 
 def _meets_threshold(results, threshold: str) -> bool:
@@ -743,7 +690,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
 
-    scanner = Scanner(settings=settings, proxy=args.proxy)
     targets = [target]
     if args.discover_subdomains:
         domain = urlparse(target).hostname or ""
@@ -778,77 +724,32 @@ def main(argv: list[str] | None = None) -> int:
             console_print(message(args.lang, "ct_added", count=len(targets) - 1))
         except Exception as exc:
             console_print(message(args.lang, "ct_warning", error=f"{type(exc).__name__}: {exc}"))
+    scan = None
     if args.tui:
         from .tui import run_with_progress
 
-        results = []
-        for discovered_target in targets:
-            results.extend(
-                run_with_progress(
-                    lambda callback, target=discovered_target: scanner.scan_target(
-                        target, progress_callback=callback
-                    ),
-                    total=len(settings.paths),
-                    title=f"Scanning {discovered_target}",
-                )
+        def scan(scanner, url):
+            return run_with_progress(
+                lambda callback: scanner.scan_target(url, progress_callback=callback),
+                total=len(settings.paths),
+                title=f"Scanning {url}",
             )
-    else:
-        results = []
-        for discovered_target in targets:
-            results.extend(scanner.scan_target(discovered_target))
-    parsed_target = urlparse(target)
-    host = parsed_target.hostname or ""
-    # Mail records only exist for real domains, not IP literals or names like "localhost".
-    host_is_domain = "." in host and not _is_ip_literal(host)
-    # Which optional checks actually completed, for the owner report. Anything not
-    # recorded as "checked" is shown as unchecked rather than as passing.
-    coverage = {
-        "cms": "checked" if settings.cms_enabled else "not_checked",
-        "js": "checked" if settings.scan_js else "not_checked",
-        "email": "not_checked",
-        "tls": "not_checked",
-    }
-    if settings.dns_enabled and host_is_domain:
-        try:
-            results = _attach_to_primary(results, target, dns_findings(inspect_domain(host)))
-            coverage["email"] = "checked"
-        except Exception as exc:
-            coverage["email"] = "failed"
-            console_print(message(args.lang, "dns_warning", error=f"{type(exc).__name__}: {exc}"))
-    if settings.tls_check_enabled and host and parsed_target.scheme == "https":
-        if args.proxy:
-            console_print(message(args.lang, "tls_proxy"))
-        else:
-            try:
-                certificate = inspect_certificate(
-                    host, parsed_target.port or 443, timeout=settings.timeout
-                )
-                if certificate.connect_error:
-                    coverage["tls"] = "failed"
-                    console_print(
-                        message(args.lang, "tls_warning", error=certificate.connect_error)
-                    )
-                else:
-                    coverage["tls"] = "checked"
-                results = _attach_to_primary(results, target, tls_findings(certificate))
-            except Exception as exc:
-                coverage["tls"] = "failed"
-                console_print(
-                    message(args.lang, "tls_warning", error=f"{type(exc).__name__}: {exc}")
-                )
-    wp_db_date = None
-    if settings.cms_enabled:
-        results, wp_db_date = _match_wordpress_vulnerabilities(results, args.lang)
-    if args.ignore_rule:
-        ignored = set(args.ignore_rule)
-        results = [
-            replace(
-                result,
-                findings=tuple(f for f in result.findings if f.rule_id not in ignored),
-                verified_rules=tuple(rule for rule in result.verified_rules if rule not in ignored),
-            )
-            for result in results
-        ]
+
+    audit = run_audit(
+        target,
+        settings,
+        proxy=args.proxy,
+        lang=args.lang,
+        extra_targets=targets,
+        ignore_rules=args.ignore_rule,
+        notify=console_print,
+        scan=scan,
+        # Module-level references so callers and tests can replace them on this module.
+        scanner_factory=Scanner,
+        inspect_domain=inspect_domain,
+        inspect_certificate=inspect_certificate,
+    )
+    results, coverage, wp_db_date = audit.results, audit.coverage, audit.wp_vulns_checked_on
 
     finished = datetime.now(UTC)
     with Database(settings.db_path) as db:
