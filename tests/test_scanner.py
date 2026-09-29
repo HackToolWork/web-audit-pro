@@ -1,6 +1,8 @@
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pytest
 import requests
 
 from web_audit.config import Settings
@@ -98,3 +100,103 @@ def test_scanner_can_complete_real_local_http_workflow():
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.fixture(scope="module")
+def verification_server():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - stdlib handler API
+            if self.path == "/timeout":
+                time.sleep(0.2)
+                self.close_connection = True
+                return
+            status = {"/error": 503, "/redirect": 302}.get(self.path, 200)
+            body = b"a" * 64 if self.path == "/oversized" else b"<html>ok</html>"
+            # Avoid the stdlib's automatically disclosed Server header in this fixture.
+            self.send_response_only(status)
+            self.send_header(
+                "Content-Type", "application/json" if self.path == "/json" else "text/html"
+            )
+            self.send_header(
+                "Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'"
+            )
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+            self.send_header(
+                "Content-Length", "100" if self.path == "/incomplete" else str(len(body))
+            )
+            if status == 302:
+                self.send_header("Location", "/ok")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+
+def test_scanner_records_positive_verification_from_completed_http_response(verification_server):
+    scanner = Scanner(Settings(retries=0, scan_js=False, cms_enabled=False))
+    result = scanner.check(f"{verification_server}/ok")
+    assert result.status == 200
+    assert result.error == ""
+    assert result.verification_version == 1
+    assert set(result.verified_rules) == {
+        "headers.content_type_options",
+        "headers.csp",
+        "headers.csp_report_only",
+        "headers.referrer_policy",
+        "headers.clickjacking",
+        "cors.wildcard_credentials",
+        "info.stack_headers",
+    }
+    # HSTS on this plain-HTTP response cannot verify either HTTPS finding.
+    assert "headers.hsts" not in result.verified_rules
+
+
+def test_scanner_does_not_verify_html_rules_when_resource_changes_type(verification_server):
+    scanner = Scanner(Settings(retries=0, scan_js=False, cms_enabled=False))
+    result = scanner.check(f"{verification_server}/json")
+    assert result.verification_version == 1
+    assert "headers.content_type_options" in result.verified_rules
+    assert not {"headers.csp", "headers.csp_report_only", "headers.clickjacking"} & set(
+        result.verified_rules
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "status", "truncated"),
+    [("/error", 503, False), ("/redirect", 302, False), ("/oversized", 200, True)],
+)
+def test_scanner_does_not_verify_error_redirect_or_truncated_responses(
+    verification_server, path, status, truncated
+):
+    scanner = Scanner(Settings(retries=0, max_size=16, scan_js=False, cms_enabled=False))
+    result = scanner.check(f"{verification_server}{path}")
+    assert result.status == status
+    assert result.truncated is truncated
+    assert result.verification_version == 0
+    assert result.verified_rules == ()
+
+
+@pytest.mark.parametrize("path", ["/timeout", "/incomplete"])
+def test_scanner_does_not_verify_timed_out_or_incomplete_responses(verification_server, path):
+    scanner = Scanner(Settings(retries=0, timeout=0.05, scan_js=False, cms_enabled=False))
+    result = scanner.check(f"{verification_server}{path}")
+    assert result.status is None
+    assert result.error
+    assert result.verification_version == 0
+    assert result.verified_rules == ()

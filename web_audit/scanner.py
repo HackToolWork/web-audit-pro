@@ -17,8 +17,10 @@ from .cms import fingerprint as fingerprint_cms
 from .config import Settings
 from .js_audit import analyze_js, discover_script_urls
 from .models import CheckResult
-from .security import analyze_response
+from .security import analyze_response, verified_response_rules
 from .utils import build_url
+from .wordpress import detect_components
+from .wordpress import findings as wordpress_findings
 
 logger = logging.getLogger(__name__)
 
@@ -128,11 +130,19 @@ class Scanner:
                     )
                     if matches:
                         findings = tuple((*findings, *cms_findings(matches)))
+                    wordpress = next((m for m in matches if m.product == "WordPress"), None)
+                    if wordpress is not None:
+                        components = detect_components(
+                            body.decode("utf-8", errors="replace"),
+                            core_version=wordpress.version,
+                        )
+                        findings = tuple((*findings, *wordpress_findings(components)))
                 elif body and (
                     "javascript" in content_type
                     or urlparse(url).path.lower().endswith((".js", ".mjs"))
                 ):
                     findings = tuple((*findings, *analyze_js(url, body)))
+                verified = 200 <= response.status_code < 300 and not truncated
                 return CheckResult(
                     url=url,
                     status=response.status_code,
@@ -143,6 +153,14 @@ class Scanner:
                     location=location,
                     findings=findings,
                     discovered_urls=discovered_urls,
+                    verification_version=1 if verified else 0,
+                    verified_rules=(
+                        verified_response_rules(
+                            url=url, status=response.status_code, headers=response.headers
+                        )
+                        if verified
+                        else ()
+                    ),
                 )
         except requests.RequestException as exc:
             return CheckResult(

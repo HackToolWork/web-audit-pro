@@ -5,9 +5,11 @@ threads = 10
 requests_per_second = 2.0
 timeout = 5.0
 output_dir = "reports"
+# require_ownership = true  # refuse targets whose ownership is not verified
 
 [features]
 dns = true
+tls_check = true
 cms = true
 scan_js = true
 tui = false
@@ -15,6 +17,7 @@ tui = false
 [report]
 company = "Security Assessment Team"
 theme = "dark"
+lang = "en"  # owner report language: en or ru
 
 [nvd]
 nvd_timeout = 12.0

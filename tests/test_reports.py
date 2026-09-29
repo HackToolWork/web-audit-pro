@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 
+from web_audit.lifecycle_reporting import summarize_lifecycle
 from web_audit.models import CheckResult, Finding
 from web_audit.reports import save_csv, save_html, save_json, summary
 
@@ -96,7 +97,7 @@ def test_html_contains_aggregated_security_findings(tmp_path):
 
     assert "Security findings" in html
     assert "2 unique rules" in html
-    assert "3 observations" in html
+    assert "3 distinct observations" in html
     assert "headers.csp" in html
     assert "2 affected URLs" in html
     assert "Deploy a restrictive CSP." in html
@@ -111,7 +112,8 @@ def test_html_shows_empty_security_findings_state(tmp_path):
     html = html_path.read_text(encoding="utf-8")
 
     assert "Security findings" in html
-    assert "No security findings." in html
+    assert "No current findings to turn into tasks." in html
+    assert "No URLs were checked." in html
 
 
 def test_reports_are_written_and_html_is_escaped(tmp_path):
@@ -129,3 +131,26 @@ def test_reports_are_written_and_html_is_escaped(tmp_path):
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["summary"]["findings"] == 1
     assert csv_path.read_text(encoding="utf-8").startswith("url,status,")
+
+
+def test_html_recheck_summary_explains_unverified_and_escapes_details(tmp_path):
+    previous = {
+        "target": "https://example.com",
+        "results": [
+            {
+                "url": "https://example.com/",
+                "findings": [{"rule_id": "headers.csp", "severity": "low"}],
+            }
+        ],
+    }
+    lifecycle = summarize_lifecycle(previous, {"target": previous["target"], "results": []})
+    lifecycle["unverified"][0]["reason"] = "Timeout <script>alert(1)</script>"
+    path = tmp_path / "recheck.html"
+    save_html(previous["target"], [], path, lifecycle=lifecycle)
+    page = path.read_text(encoding="utf-8")
+
+    assert "Recheck results" in page
+    assert "[UNVERIFIED] headers.csp" in page
+    assert "FIXED means a supported condition passed its recheck" in page
+    assert "Timeout &lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "<script>alert(1)</script>" not in page

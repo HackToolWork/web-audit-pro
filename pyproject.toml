@@ -4,13 +4,43 @@ build-backend = "hatchling.build"
 
 [project]
 name = "web-audit-pro"
-version = "5.0.1"
-description = "A low-impact, auditable HTTP security checker for authorized web assessments."
+version = "5.1.0"
+description = "Free, low-impact website security checks with plain-language reports in English and Russian: TLS, email (SPF/DMARC), security headers and WordPress plugins."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Web Audit Pro contributors" }]
+keywords = [
+  "security",
+  "website",
+  "scanner",
+  "ssl",
+  "tls",
+  "dmarc",
+  "spf",
+  "wordpress",
+  "security-headers",
+  "audit",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: System Administrators",
+  "Natural Language :: English",
+  "Natural Language :: Russian",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Security",
+]
 dependencies = [
   "requests==2.34.2",
   "dnspython==2.8.0",
@@ -18,6 +48,13 @@ dependencies = [
   "fastapi==0.141.1",
   "uvicorn==0.52.4",
 ]
+
+[project.urls]
+Homepage = "https://sitozor.ru"
+Documentation = "https://github.com/HackToolWork/web-audit-pro#readme"
+Source = "https://github.com/HackToolWork/web-audit-pro"
+Issues = "https://github.com/HackToolWork/web-audit-pro/issues"
+Changelog = "https://github.com/HackToolWork/web-audit-pro/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

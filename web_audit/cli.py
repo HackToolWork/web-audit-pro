@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -9,23 +10,34 @@ import subprocess
 import sys
 import uuid
 import webbrowser
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from . import PROJECT_NAME, __version__
+from . import PROJECT_NAME, __version__, ownership, wp_vulndb
 from .config import Settings, apply_cli_config, coerce_cli_types
 from .database import Database
 from .diffing import compare_reports, load_report, save_diff
 from .dns_audit import findings as dns_findings
 from .dns_audit import inspect_domain
+from .i18n import SEVERITY_LABELS, message
+from .lifecycle_cli import render_lifecycle_summary
+from .lifecycle_reporting import summarize_lifecycle, summarize_lifecycle_history
 from .logging import configure_logging, console_print, paint
-from .reports import save_csv, save_html, save_json, summary
+from .owner_report import finding_title, save_owner_report
+from .owner_texts import UI
+from .ownership import OwnershipProof
+from .reports import save_action_plan, save_csv, save_html, save_json, summary
 from .sarif import save_sarif
 from .scanner import Scanner
 from .scope import load_scope, target_in_scope
 from .serve import generate_token, run_server
 from .subdomains import discover_from_crtsh
+from .tls_audit import findings as tls_findings
+from .tls_audit import inspect_certificate
 from .utils import is_non_public_address, normalize_target, resolve_target_addresses
+from .wordpress import parse_evidence as parse_wordpress_evidence
 
 logger = logging.getLogger(__name__)
 _SEVERITY_ORDER = {"none": 99, "info": 0, "low": 1, "medium": 2, "high": 3}
@@ -43,6 +55,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Refresh the local CMS advisory database from NVD and exit",
+    )
+    parser.add_argument(
+        "--update-wp-db",
+        action="store_true",
+        default=None,
+        help=(
+            "Download the Wordfence Intelligence WordPress vulnerability feed "
+            "(needs WORDFENCE_API_KEY) for offline plugin/theme checks, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--ownership-token",
+        action="store_true",
+        default=None,
+        help="Print DNS/file ownership verification instructions for the target and exit",
+    )
+    parser.add_argument(
+        "--verify-ownership",
+        action="store_true",
+        default=None,
+        help="Check whether the target's ownership token is published and exit",
+    )
+    parser.add_argument(
+        "--require-ownership",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Refuse to scan unless ownership of the target is verified (default: off)",
     )
     parser.add_argument(
         "-t",
@@ -113,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run passive DNS checks (default: on)",
     )
     parser.add_argument(
+        "--tls-check",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Check TLS certificate validity and expiry for HTTPS targets (default: on)",
+    )
+    parser.add_argument(
         "--cms",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -159,9 +204,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--open",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
-        help="Open the generated HTML report in the default browser after the scan",
+        help="Open the owner report in the browser after the scan (default: when run "
+        "interactively on a desktop)",
     )
     parser.add_argument(
         "--serve",
@@ -195,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--logo", type=Path, help="Optional PNG/JPEG logo embedded in HTML")
     parser.add_argument(
+        "--lang",
+        choices=("en", "ru"),
+        default=None,
+        help="Language of the plain-language owner report (default: from the system locale)",
+    )
+    parser.add_argument(
         "--user-agent-profile",
         choices=("stable", "browser"),
         default=None,
@@ -214,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_result(result) -> None:
+def _print_result(result, lang: str = "en") -> None:
     if result.status is None:
         console_print(paint(f"[-] ERR {result.url} — {result.error}", "31"))
     elif result.status < 300:
@@ -228,8 +280,72 @@ def _print_result(result) -> None:
         console_print(paint(f"[-] {result.status} {result.url}", "31"))
 
     for finding in result.findings:
-        label = f"    [{finding.severity.upper()}] {finding.title} ({finding.rule_id})"
-        console_print(paint(label, "35"))
+        severity = SEVERITY_LABELS[lang][finding.severity]
+        title = (
+            finding_title(finding.rule_id, lang, default=finding.title)
+            if lang != "en"
+            else finding.title
+        )
+        console_print(paint(f"    [{severity}] {title} ({finding.rule_id})", "35"))
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _attach_to_primary(results: list, target: str, extra: tuple) -> list:
+    """Attach target-level findings (DNS, TLS) to the result for the target root."""
+    if not extra or not results:
+        return results
+    primary = next((r for r in results if r.url in {target, target + "/"}), results[0])
+    updated = replace(primary, findings=(*primary.findings, *extra))
+    return [updated if r is primary else r for r in results]
+
+
+def _verify_ownership(args: argparse.Namespace, target: str) -> OwnershipProof:
+    return ownership.verify(
+        target,
+        timeout=args.timeout,
+        verify_tls=not args.insecure_tls,
+        proxies={"http": args.proxy, "https": args.proxy} if args.proxy else None,
+        allow_private=bool(args.allow_private),
+    )
+
+
+def _match_wordpress_vulnerabilities(results: list, lang: str = "en") -> tuple[list, str | None]:
+    """Add offline vulnerability findings for WordPress components with known versions.
+
+    Returns the updated results and the local database date when a check ran.
+    """
+    components = [
+        (index, parsed)
+        for index, result in enumerate(results)
+        for finding in result.findings
+        if finding.rule_id.startswith(("wordpress.plugin.", "wordpress.theme."))
+        and (parsed := parse_wordpress_evidence(finding.evidence))
+    ]
+    if not components:
+        return results, None
+    db_path = wp_vulndb.default_path()
+    db = wp_vulndb.load(db_path)
+    if db is None:
+        console_print(message(lang, "wp_db_missing"))
+        return results, None
+    if db.age_days > wp_vulndb.STALE_AFTER_DAYS:
+        console_print(message(lang, "wp_db_stale", days=int(db.age_days)))
+    updated = list(results)
+    for index, (kind, slug, version) in components:
+        if version is None:
+            continue
+        extra = wp_vulndb.component_findings(kind, slug, version, db)
+        if extra:
+            result = updated[index]
+            updated[index] = replace(result, findings=(*result.findings, *extra))
+    return updated, datetime.fromtimestamp(db.updated_at, UTC).strftime("%Y-%m-%d")
 
 
 def _meets_threshold(results, threshold: str) -> bool:
@@ -342,6 +458,7 @@ def _run_output_paths(settings: Settings, target: str, started: datetime) -> Non
         "json_name": f"report-{suffix}.json",
         "sarif_name": f"report-{suffix}.sarif",
         "diff_name": f"diff-{suffix}.json",
+        "owner_name": f"owner-report-{suffix}.html",
         "log_name": f"scanner-{suffix}.log",
     }
     for attr, value in defaults.items():
@@ -360,6 +477,7 @@ _BUILTIN_DEFAULTS = {
     "insecure_tls": False,
     "allow_private": False,
     "dns": True,
+    "tls_check": True,
     "cms": True,
     "scan_js": True,
     "max_js_files": 20,
@@ -369,7 +487,6 @@ _BUILTIN_DEFAULTS = {
     "nvd_timeout": 12.0,
     "kali_wordlist": False,
     "tui": False,
-    "open": False,
     "serve": False,
     "serve_host": "127.0.0.1",
     "serve_port": 8765,
@@ -386,7 +503,50 @@ _BUILTIN_DEFAULTS = {
     "paths_file": None,
     "config": None,
     "update_db": False,
+    "update_wp_db": False,
+    "ownership_token": False,
+    "verify_ownership": False,
+    "require_ownership": False,
 }
+
+
+_STATUS_COLORS = {"red": "31;1", "yellow": "33;1", "green": "32;1"}
+
+
+def _desktop_session() -> bool:
+    """Whether opening a browser makes sense: an interactive terminal with a display."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    if sys.platform.startswith("linux"):
+        return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
+    return True
+
+
+def _system_lang() -> str:
+    """Report language from the locale (LC_ALL > LC_MESSAGES > LANG): ru or en."""
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.getenv(name, "").strip()
+        if value:
+            return "ru" if value.lower().startswith("ru") else "en"
+    return "en"
+
+
+_AUTHORIZATION_PROMPT = {
+    "en": "Do you own {host} or have permission to test it? [y/N]: ",
+    "ru": "Вы владелец сайта {host} или у вас есть разрешение на его проверку? [y/N]: ",
+}
+
+
+def _confirm_authorization(target: str, lang: str) -> bool:
+    """Ask interactively; non-interactive runs still require --yes-i-am-authorized."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    host = urlparse(normalize_target(target) or target).hostname or target
+    try:
+        answer = input(_AUTHORIZATION_PROMPT[lang].format(host=host))
+    except EOFError:
+        return False
+    return answer.strip().lower() in {"y", "yes", "д", "да"}
 
 
 def _prepare_args(args: argparse.Namespace) -> tuple[argparse.Namespace, Path | None]:
@@ -396,6 +556,8 @@ def _prepare_args(args: argparse.Namespace) -> tuple[argparse.Namespace, Path | 
             setattr(args, key, default)
     if args.ignore_rule is None:
         args.ignore_rule = []
+    if args.lang is None:
+        args.lang = _system_lang()
     coerce_cli_types(args)
     for attr in ("scope_file", "output_dir", "paths_file", "compare", "logo"):
         value = getattr(args, attr, None)
@@ -412,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args, config_path = _prepare_args(args)
     except ValueError as exc:
-        console_print(f"Configuration error: {exc}")
+        console_print(message(args.lang or _system_lang(), "config_error", error=exc))
         return 2
 
     if args.update_db:
@@ -422,35 +584,67 @@ def main(argv: list[str] | None = None) -> int:
         try:
             updated, failed = update_database(db_path, timeout=args.nvd_timeout)
         except Exception as exc:
-            console_print(f"Vulnerability DB update failed: {type(exc).__name__}: {exc}")
+            console_print(message(args.lang, "cms_db_failed", error=f"{type(exc).__name__}: {exc}"))
             return 1
-        console_print(f"[+] Local CMS advisory database updated: {updated} records")
+        console_print(message(args.lang, "cms_db_updated", count=updated))
         if failed:
-            console_print(f"[i] {failed} CMS source(s) could not be refreshed; existing data kept.")
-        console_print(f"[i] Database: {db_path}")
+            console_print(message(args.lang, "cms_db_partial", count=failed))
+        console_print(message(args.lang, "database", path=db_path))
+        return 0
+
+    if args.update_wp_db:
+        db_path = wp_vulndb.default_path()
+        wait_hours = wp_vulndb.hours_until_refresh_allowed(db_path)
+        if wait_hours > 0:
+            console_print(message(args.lang, "wp_db_fresh", hours=wait_hours, path=db_path))
+            return 0
+        try:
+            records = wp_vulndb.update(db_path)
+        except Exception as exc:
+            console_print(message(args.lang, "wp_db_failed", error=f"{type(exc).__name__}: {exc}"))
+            console_print(message(args.lang, "wp_db_kept"))
+            return 1
+        console_print(message(args.lang, "wp_db_updated", count=records))
+        console_print(message(args.lang, "wp_db_source", source=wp_vulndb.SOURCE, path=db_path))
         return 0
 
     if not args.target:
-        console_print("Target is required unless --update-db is used.")
+        console_print(message(args.lang, "target_required"))
         return 2
 
+    if args.ownership_token or args.verify_ownership:
+        target = normalize_target(args.target)
+        if not target:
+            console_print(message(args.lang, "invalid_target"))
+            return 2
+        if args.ownership_token:
+            console_print(ownership.instructions(target, lang=args.lang))
+            console_print(message(args.lang, "ownership_key", path=ownership.key_path()))
+            return 0
+        proof = _verify_ownership(args, target)
+        if proof.verified:
+            console_print(
+                message(args.lang, "ownership_verified", domain=proof.domain, detail=proof.detail)
+            )
+            return 0
+        console_print(message(args.lang, "ownership_failed", detail=proof.detail))
+        console_print(message(args.lang, "ownership_hint"))
+        return 1
+
     if not args.company.strip():
-        console_print("[i] Empty --company value; using the default company name: Web Audit Pro.")
+        console_print(message(args.lang, "empty_company"))
         args.company = "Web Audit Pro"
 
-    if not args.yes_i_am_authorized:
-        console_print(
-            "Refusing to scan without authorization confirmation. "
-            "Use --yes-i-am-authorized for systems you are permitted to test."
-        )
+    if not args.yes_i_am_authorized and not _confirm_authorization(args.target, args.lang):
+        console_print(message(args.lang, "authorization_refused"))
         return 2
 
     if config_path:
-        console_print(f"[i] Config: {config_path}")
+        console_print(message(args.lang, "config_path", path=config_path))
 
     target = normalize_target(args.target)
     if not target:
-        console_print("Invalid target URL.")
+        console_print(message(args.lang, "invalid_target"))
         return 2
 
     try:
@@ -462,13 +656,13 @@ def main(argv: list[str] | None = None) -> int:
             wordlist = _find_wordlist()
             if wordlist:
                 selected_paths = _load_paths_file(wordlist, limit=500)
-                console_print(f"[*] Wordlist: {wordlist} (max 500 paths)")
+                console_print(message(args.lang, "wordlist", path=wordlist))
             else:
-                console_print("[i] No system wordlist found; using the built-in safe path set.")
+                console_print(message(args.lang, "no_wordlist"))
         if not selected_paths:
             selected_paths = Settings().paths
     except ValueError as exc:
-        console_print(f"Configuration/scope error: {exc}")
+        console_print(message(args.lang, "scope_error", error=exc))
         return 2
 
     settings = Settings(
@@ -482,12 +676,14 @@ def main(argv: list[str] | None = None) -> int:
         requests_per_second=args.requests_per_second,
         scope_file=args.scope_file,
         dns_enabled=args.dns,
+        tls_check_enabled=args.tls_check,
         cms_enabled=args.cms,
         scan_js=args.scan_js,
         max_js_files=args.max_js_files,
         content_scan_max_size=args.content_scan_max_size,
         company=args.company,
         theme=args.theme,
+        report_lang=args.lang,
         logo_path=args.logo,
         ua_profile=args.user_agent_profile,
     )
@@ -518,19 +714,38 @@ def main(argv: list[str] | None = None) -> int:
             backup_count=settings.log_backup_count,
         )
     except (OSError, ValueError) as exc:
-        console_print(f"Configuration/scope error: {exc}")
+        console_print(message(args.lang, "scope_error", error=exc))
         return 2
+
+    proof: OwnershipProof | None = None
+    if args.require_ownership:
+        proof = _verify_ownership(args, target)
+        if not proof.verified:
+            console_print(
+                message(
+                    args.lang,
+                    "ownership_refused",
+                    host=urlparse(target).hostname,
+                    detail=proof.detail,
+                )
+            )
+            return 2
+        console_print(
+            message(args.lang, "ownership_verified", domain=proof.domain, detail=proof.detail)
+        )
 
     logger.info("Scan started target=%s addresses=%s", target, sorted(map(str, addresses)))
 
-    console_print(paint(f"[*] Target: {target}", "36;1"))
-    console_print(paint(f"[*] Paths: {len(settings.paths)} | Threads: {settings.threads}", "36"))
+    console_print(paint(message(args.lang, "target", target=target), "36;1"))
+    console_print(
+        paint(
+            message(args.lang, "paths", paths=len(settings.paths), threads=settings.threads), "36"
+        )
+    )
 
     scanner = Scanner(settings=settings, proxy=args.proxy)
     targets = [target]
     if args.discover_subdomains:
-        from urllib.parse import urlparse
-
         domain = urlparse(target).hostname or ""
         try:
             discovered = discover_from_crtsh(domain)
@@ -554,12 +769,15 @@ def main(argv: list[str] | None = None) -> int:
                             safe_targets.append(candidate)
                 except ValueError:
                     continue
+            if proof is not None:
+                # Only hosts the proof covers: a token file proves one host, DNS the zone.
+                safe_targets = [t for t in safe_targets if proof.covers(urlparse(t).hostname or "")]
             targets = safe_targets
             if target not in targets:
                 targets.insert(0, target)
-            console_print(f"[*] CT discovery: {len(targets) - 1} candidate host(s) added")
+            console_print(message(args.lang, "ct_added", count=len(targets) - 1))
         except Exception as exc:
-            console_print(f"CT discovery warning: {type(exc).__name__}: {exc}")
+            console_print(message(args.lang, "ct_warning", error=f"{type(exc).__name__}: {exc}"))
     if args.tui:
         from .tui import run_with_progress
 
@@ -578,32 +796,56 @@ def main(argv: list[str] | None = None) -> int:
         results = []
         for discovered_target in targets:
             results.extend(scanner.scan_target(discovered_target))
-    if settings.dns_enabled:
-        from dataclasses import replace
-        from urllib.parse import urlparse
-
-        host = urlparse(target).hostname
-        if host and not any(ch.isdigit() for ch in host):
+    parsed_target = urlparse(target)
+    host = parsed_target.hostname or ""
+    # Mail records only exist for real domains, not IP literals or names like "localhost".
+    host_is_domain = "." in host and not _is_ip_literal(host)
+    # Which optional checks actually completed, for the owner report. Anything not
+    # recorded as "checked" is shown as unchecked rather than as passing.
+    coverage = {
+        "cms": "checked" if settings.cms_enabled else "not_checked",
+        "js": "checked" if settings.scan_js else "not_checked",
+        "email": "not_checked",
+        "tls": "not_checked",
+    }
+    if settings.dns_enabled and host_is_domain:
+        try:
+            results = _attach_to_primary(results, target, dns_findings(inspect_domain(host)))
+            coverage["email"] = "checked"
+        except Exception as exc:
+            coverage["email"] = "failed"
+            console_print(message(args.lang, "dns_warning", error=f"{type(exc).__name__}: {exc}"))
+    if settings.tls_check_enabled and host and parsed_target.scheme == "https":
+        if args.proxy:
+            console_print(message(args.lang, "tls_proxy"))
+        else:
             try:
-                dns_report = inspect_domain(host)
-                dns_extra = dns_findings(dns_report)
-                if dns_extra and results:
-                    primary = next(
-                        (r for r in results if r.url == target or r.url == target + "/"),
-                        results[0],
+                certificate = inspect_certificate(
+                    host, parsed_target.port or 443, timeout=settings.timeout
+                )
+                if certificate.connect_error:
+                    coverage["tls"] = "failed"
+                    console_print(
+                        message(args.lang, "tls_warning", error=certificate.connect_error)
                     )
-                    updated = replace(primary, findings=tuple((*primary.findings, *dns_extra)))
-                    results = [updated if r is primary else r for r in results]
+                else:
+                    coverage["tls"] = "checked"
+                results = _attach_to_primary(results, target, tls_findings(certificate))
             except Exception as exc:
-                console_print(f"DNS warning: {type(exc).__name__}: {exc}")
+                coverage["tls"] = "failed"
+                console_print(
+                    message(args.lang, "tls_warning", error=f"{type(exc).__name__}: {exc}")
+                )
+    wp_db_date = None
+    if settings.cms_enabled:
+        results, wp_db_date = _match_wordpress_vulnerabilities(results, args.lang)
     if args.ignore_rule:
-        from dataclasses import replace
-
         ignored = set(args.ignore_rule)
         results = [
             replace(
                 result,
                 findings=tuple(f for f in result.findings if f.rule_id not in ignored),
+                verified_rules=tuple(rule for rule in result.verified_rules if rule not in ignored),
             )
             for result in results
         ]
@@ -616,6 +858,7 @@ def main(argv: list[str] | None = None) -> int:
             finished_at=finished.isoformat(),
             results=results,
         )
+        scan_history = db.load_scan_history(target)
 
     save_csv(results, settings.csv_path)
     if args.cms_vuln_lookup:
@@ -624,10 +867,7 @@ def main(argv: list[str] | None = None) -> int:
         vuln_db = default_db_path()
         enriched = []
         if not vuln_db.is_file():
-            console_print(
-                "[i] Local CMS advisory DB not found; run `web-audit --update-db` "
-                "before using --cms-vuln-lookup."
-            )
+            console_print(message(args.lang, "cms_db_missing"))
         for item in results:
             for finding in item.findings:
                 if not finding.rule_id.startswith("cms.detected."):
@@ -647,6 +887,37 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps(dict(enriched), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+    save_json(target, results, settings.json_path)
+    save_sarif(results, settings.sarif_path)
+    lifecycle = None
+    comparison_failed = False
+    if args.compare:
+        try:
+            previous_report = load_report(args.compare)
+            current_report = load_report(settings.json_path)
+
+            diff = compare_reports(previous_report, current_report)
+            save_diff(diff, settings.diff_path)
+
+            console_print(
+                message(
+                    args.lang,
+                    "diff",
+                    path=settings.diff_path,
+                    added=diff["added_count"],
+                    removed=diff["removed_count"],
+                )
+            )
+
+            lifecycle = summarize_lifecycle(previous_report, current_report)
+            console_print(render_lifecycle_summary(lifecycle))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            console_print(message(args.lang, "comparison_error", error=exc))
+            comparison_failed = True
+    elif len(scan_history) >= 2:
+        lifecycle = summarize_lifecycle_history(scan_history)
+        console_print(render_lifecycle_summary(lifecycle))
+
     save_html(
         target,
         results,
@@ -654,48 +925,76 @@ def main(argv: list[str] | None = None) -> int:
         company=settings.company,
         theme=settings.theme,
         logo_path=settings.logo_path,
+        lifecycle=lifecycle,
     )
-    save_json(target, results, settings.json_path)
-    save_sarif(results, settings.sarif_path)
-    if args.compare:
-        try:
-            diff = compare_reports(load_report(args.compare), load_report(settings.json_path))
-            save_diff(diff, settings.diff_path)
-            console_print(
-                f"DIFF: {settings.diff_path} | "
-                f"added={diff['added_count']} removed={diff['removed_count']}"
-            )
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            console_print(f"Comparison error: {exc}")
-            return 2
+    action_plan_path = settings.json_path.with_name(f"{settings.json_path.stem}-actions.md")
+    save_action_plan(target, results, action_plan_path, lifecycle=lifecycle)
+    owner_data = save_owner_report(
+        target,
+        results,
+        settings.owner_path,
+        lang=settings.report_lang,
+        company=settings.company,
+        logo_path=settings.logo_path,
+        coverage=coverage,
+        lifecycle=lifecycle,
+        wp_vulns_checked_on=wp_db_date,
+        ownership=proof,
+    )
+    if comparison_failed:
+        console_print(f"HTML: {settings.html_path}")
+        console_print(f"PLAN: {action_plan_path}")
+        console_print(f"OWNER: {settings.owner_path}")
+        return 2
 
     for result in results:
-        _print_result(result)
+        _print_result(result, args.lang)
 
     stats = summary(results)
     console_print("")
-    console_print(paint(f"Scan #{scan_id} complete", "32;1"))
+    console_print(paint(message(args.lang, "scan_complete", scan_id=scan_id), "32;1"))
     console_print(
-        f"URLs={stats['total']} | 2xx={stats['2xx']} | 3xx={stats['3xx']} "
-        f"| 4xx={stats['4xx']} | 5xx={stats['5xx']} | errors={stats['errors']}"
+        message(
+            args.lang,
+            "stats_urls",
+            total=stats["total"],
+            ok=stats["2xx"],
+            redirects=stats["3xx"],
+            client=stats["4xx"],
+            server=stats["5xx"],
+            errors=stats["errors"],
+        )
     )
     console_print(
-        f"Findings={stats['findings']} | high={stats['high']} | medium={stats['medium']} "
-        f"| low={stats['low']} | info={stats['info']}"
+        message(
+            args.lang,
+            "stats_findings",
+            **{key: stats[key] for key in ("findings", "high", "medium", "low", "info")},
+        )
     )
     console_print(f"CSV : {settings.csv_path}")
     console_print(f"HTML: {settings.html_path}")
+    console_print(f"PLAN: {action_plan_path}")
+    console_print(f"OWNER: {settings.owner_path}")
     console_print(f"JSON: {settings.json_path}")
     console_print(f"SARIF: {settings.sarif_path}")
     console_print(f"DB  : {settings.db_path}")
     console_print(f"LOG : {settings.log_path}")
-    if args.open:
-        if _open_report(settings.html_path):
-            console_print(f"[*] Opened report: {settings.html_path.resolve()}")
+    status = owner_data["status"]
+    console_print("")
+    console_print(
+        paint(
+            message(args.lang, "status_line", status=UI[args.lang]["status_" + status]),
+            _STATUS_COLORS.get(status, "37;1"),
+        )
+    )
+    console_print(message(args.lang, "owner_report_line", path=settings.owner_path))
+    if args.open if args.open is not None else _desktop_session():
+        owner_path = settings.owner_path.resolve()
+        if _open_report(settings.owner_path):
+            console_print(message(args.lang, "opened_report", path=owner_path))
         else:
-            console_print(
-                f"[i] Could not open the report automatically; file: {settings.html_path.resolve()}"
-            )
+            console_print(message(args.lang, "open_failed", path=owner_path))
     if args.cms_vuln_lookup:
         console_print(f"NVD : {settings.output_dir / 'cms-advisories.json'}")
 
@@ -707,15 +1006,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.serve:
         if args.serve_host != "127.0.0.1" and not args.serve_public:
-            console_print("Refusing non-local dashboard bind without --serve-public.")
+            console_print(message(args.lang, "serve_local_only"))
             return 2
         token = args.serve_token or generate_token()
         if args.serve_host != "127.0.0.1" and not args.serve_token:
-            console_print("Public dashboard binding requires --serve-token.")
+            console_print(message(args.lang, "serve_token_required"))
             return 2
-        console_print(f"Dashboard token: {token}")
+        console_print(message(args.lang, "dashboard_token", token=token))
         console_print(
-            f"Dashboard: http://{args.serve_host}:{args.serve_port}/?access_token={token}"
+            message(
+                args.lang,
+                "dashboard_url",
+                url=f"http://{args.serve_host}:{args.serve_port}/?access_token={token}",
+            )
         )
         run_server(settings.db_path, host=args.serve_host, port=args.serve_port, token=token)
     return 1 if _meets_threshold(results, args.fail_on) else 0
