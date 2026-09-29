@@ -175,13 +175,19 @@ web-audit example.com \
   --fail-on medium
 ```
 
-### 7. Open the generated report
+### 7. Open the owner report
+
+After an interactive scan on a desktop, the owner report opens in the browser
+automatically. `--open` forces it (for example over SSH with X forwarding) and
+`--no-open` turns it off:
 
 ```bash
 web-audit example.com \
   --yes-i-am-authorized \
-  --open
+  --no-open
 ```
+
+Terminal messages use the same language as the report (system locale or `--lang`).
 
 ### 8. Plain-language owner report
 

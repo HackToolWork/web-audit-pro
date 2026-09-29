@@ -162,7 +162,7 @@ def build_owner_summary(
         for state in _CHANGE_STATES:
             titles = []
             for entry in lifecycle.get(state, []):
-                titles.append(_change_title(entry["rule_id"], lang))
+                titles.append(finding_title(entry["rule_id"], lang))
             changes[state] = sorted(set(titles))
 
     attribution = []
@@ -210,7 +210,8 @@ def _vulnerable_text(task: dict, lang: str) -> tuple[str, str, str] | None:
     return title, ui["vuln_why"], todo
 
 
-def _change_title(rule_id: str, lang: str) -> str:
+def finding_title(rule_id: str, lang: str, *, default: str | None = None) -> str:
+    """Plain-language title for a rule, e.g. for change lists and terminal output."""
     if rule_id.startswith("wordpress.vulnerable."):
         kind, _, slug = rule_id.removeprefix("wordpress.vulnerable.").partition(".")
         if kind in {"plugin", "theme"} and slug:
@@ -219,7 +220,7 @@ def _change_title(rule_id: str, lang: str) -> str:
     if rule_id.startswith("wordpress.") and kind in {"plugin", "theme"} and slug:
         return f"{UI[lang]['kind_' + kind]} WordPress: {slug}"
     text = rule_text(rule_id, lang)
-    return text[0] if text else rule_id
+    return text[0] if text else (default or rule_id)
 
 
 def _cms_notes(items: list[dict], lang: str) -> list[str]:
@@ -396,7 +397,7 @@ def save_owner_report(
     lifecycle: dict | None = None,
     wp_vulns_checked_on: str | None = None,
     ownership: OwnershipProof | None = None,
-) -> None:
+) -> dict:
     data = build_owner_summary(
         results,
         coverage=coverage,
@@ -409,3 +410,4 @@ def save_owner_report(
         target, data, company=company, logo_html=logo_html(logo_path, company)
     )
     _atomic_write(path, lambda file: file.write(document))
+    return data

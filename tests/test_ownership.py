@@ -212,7 +212,7 @@ def test_require_ownership_blocks_unverified_scan(monkeypatch, tmp_path, capsys)
     )
     assert code == 2
     assert _Scanner.created == 0
-    assert "Refusing to scan" in capsys.readouterr().out
+    assert "Проверка отменена: владение shop.example.com не подтверждено" in capsys.readouterr().out
 
 
 def test_require_ownership_from_config(monkeypatch, tmp_path):

@@ -21,10 +21,12 @@ from .database import Database
 from .diffing import compare_reports, load_report, save_diff
 from .dns_audit import findings as dns_findings
 from .dns_audit import inspect_domain
+from .i18n import SEVERITY_LABELS, message
 from .lifecycle_cli import render_lifecycle_summary
 from .lifecycle_reporting import summarize_lifecycle, summarize_lifecycle_history
 from .logging import configure_logging, console_print, paint
-from .owner_report import save_owner_report
+from .owner_report import finding_title, save_owner_report
+from .owner_texts import UI
 from .ownership import OwnershipProof
 from .reports import save_action_plan, save_csv, save_html, save_json, summary
 from .sarif import save_sarif
@@ -202,9 +204,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--open",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
-        help="Open the generated HTML report in the default browser after the scan",
+        help="Open the owner report in the browser after the scan (default: when run "
+        "interactively on a desktop)",
     )
     parser.add_argument(
         "--serve",
@@ -263,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_result(result) -> None:
+def _print_result(result, lang: str = "en") -> None:
     if result.status is None:
         console_print(paint(f"[-] ERR {result.url} — {result.error}", "31"))
     elif result.status < 300:
@@ -277,8 +280,13 @@ def _print_result(result) -> None:
         console_print(paint(f"[-] {result.status} {result.url}", "31"))
 
     for finding in result.findings:
-        label = f"    [{finding.severity.upper()}] {finding.title} ({finding.rule_id})"
-        console_print(paint(label, "35"))
+        severity = SEVERITY_LABELS[lang][finding.severity]
+        title = (
+            finding_title(finding.rule_id, lang, default=finding.title)
+            if lang != "en"
+            else finding.title
+        )
+        console_print(paint(f"    [{severity}] {title} ({finding.rule_id})", "35"))
 
 
 def _is_ip_literal(host: str) -> bool:
@@ -308,7 +316,7 @@ def _verify_ownership(args: argparse.Namespace, target: str) -> OwnershipProof:
     )
 
 
-def _match_wordpress_vulnerabilities(results: list) -> tuple[list, str | None]:
+def _match_wordpress_vulnerabilities(results: list, lang: str = "en") -> tuple[list, str | None]:
     """Add offline vulnerability findings for WordPress components with known versions.
 
     Returns the updated results and the local database date when a check ran.
@@ -325,16 +333,10 @@ def _match_wordpress_vulnerabilities(results: list) -> tuple[list, str | None]:
     db_path = wp_vulndb.default_path()
     db = wp_vulndb.load(db_path)
     if db is None:
-        console_print(
-            "[i] WordPress components found; run `web-audit --update-wp-db` to check them "
-            "for known vulnerabilities."
-        )
+        console_print(message(lang, "wp_db_missing"))
         return results, None
     if db.age_days > wp_vulndb.STALE_AFTER_DAYS:
-        console_print(
-            f"[i] WordPress vulnerability database is {int(db.age_days)} days old; "
-            "run `web-audit --update-wp-db`."
-        )
+        console_print(message(lang, "wp_db_stale", days=int(db.age_days)))
     updated = list(results)
     for index, (kind, slug, version) in components:
         if version is None:
@@ -485,7 +487,6 @@ _BUILTIN_DEFAULTS = {
     "nvd_timeout": 12.0,
     "kali_wordlist": False,
     "tui": False,
-    "open": False,
     "serve": False,
     "serve_host": "127.0.0.1",
     "serve_port": 8765,
@@ -507,6 +508,18 @@ _BUILTIN_DEFAULTS = {
     "verify_ownership": False,
     "require_ownership": False,
 }
+
+
+_STATUS_COLORS = {"red": "31;1", "yellow": "33;1", "green": "32;1"}
+
+
+def _desktop_session() -> bool:
+    """Whether opening a browser makes sense: an interactive terminal with a display."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    if sys.platform.startswith("linux"):
+        return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
+    return True
 
 
 def _system_lang() -> str:
@@ -561,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args, config_path = _prepare_args(args)
     except ValueError as exc:
-        console_print(f"Configuration error: {exc}")
+        console_print(message(args.lang or _system_lang(), "config_error", error=exc))
         return 2
 
     if args.update_db:
@@ -571,74 +584,67 @@ def main(argv: list[str] | None = None) -> int:
         try:
             updated, failed = update_database(db_path, timeout=args.nvd_timeout)
         except Exception as exc:
-            console_print(f"Vulnerability DB update failed: {type(exc).__name__}: {exc}")
+            console_print(message(args.lang, "cms_db_failed", error=f"{type(exc).__name__}: {exc}"))
             return 1
-        console_print(f"[+] Local CMS advisory database updated: {updated} records")
+        console_print(message(args.lang, "cms_db_updated", count=updated))
         if failed:
-            console_print(f"[i] {failed} CMS source(s) could not be refreshed; existing data kept.")
-        console_print(f"[i] Database: {db_path}")
+            console_print(message(args.lang, "cms_db_partial", count=failed))
+        console_print(message(args.lang, "database", path=db_path))
         return 0
 
     if args.update_wp_db:
         db_path = wp_vulndb.default_path()
         wait_hours = wp_vulndb.hours_until_refresh_allowed(db_path)
         if wait_hours > 0:
-            console_print(
-                f"[i] The WordPress vulnerability database is fresh; Wordfence rate-limits "
-                f"downloads, so try again in {wait_hours:.1f} hour(s). Database: {db_path}"
-            )
+            console_print(message(args.lang, "wp_db_fresh", hours=wait_hours, path=db_path))
             return 0
         try:
             records = wp_vulndb.update(db_path)
         except Exception as exc:
-            console_print(f"WordPress vulnerability DB update failed: {type(exc).__name__}: {exc}")
-            console_print("[i] The existing local database, if any, was kept.")
+            console_print(message(args.lang, "wp_db_failed", error=f"{type(exc).__name__}: {exc}"))
+            console_print(message(args.lang, "wp_db_kept"))
             return 1
-        console_print(f"[+] WordPress vulnerability database updated: {records} records")
-        console_print(f"[i] Source: {wp_vulndb.SOURCE}; database: {db_path}")
+        console_print(message(args.lang, "wp_db_updated", count=records))
+        console_print(message(args.lang, "wp_db_source", source=wp_vulndb.SOURCE, path=db_path))
         return 0
 
     if not args.target:
-        console_print("Target is required unless --update-db or --update-wp-db is used.")
+        console_print(message(args.lang, "target_required"))
         return 2
 
     if args.ownership_token or args.verify_ownership:
         target = normalize_target(args.target)
         if not target:
-            console_print("Invalid target URL.")
+            console_print(message(args.lang, "invalid_target"))
             return 2
         if args.ownership_token:
             console_print(ownership.instructions(target, lang=args.lang))
-            console_print(
-                f"\n[i] Tokens are signed with {ownership.key_path()}; keep this file, "
-                "because replacing it invalidates every token already issued."
-            )
+            console_print(message(args.lang, "ownership_key", path=ownership.key_path()))
             return 0
         proof = _verify_ownership(args, target)
         if proof.verified:
-            console_print(f"[+] Ownership verified for {proof.domain} via {proof.detail}.")
+            console_print(
+                message(args.lang, "ownership_verified", domain=proof.domain, detail=proof.detail)
+            )
             return 0
-        console_print(f"[!] Ownership not verified: {proof.detail}")
-        console_print("[i] Run with --ownership-token for instructions.")
+        console_print(message(args.lang, "ownership_failed", detail=proof.detail))
+        console_print(message(args.lang, "ownership_hint"))
         return 1
 
     if not args.company.strip():
-        console_print("[i] Empty --company value; using the default company name: Web Audit Pro.")
+        console_print(message(args.lang, "empty_company"))
         args.company = "Web Audit Pro"
 
     if not args.yes_i_am_authorized and not _confirm_authorization(args.target, args.lang):
-        console_print(
-            "Refusing to scan without authorization confirmation. "
-            "Use --yes-i-am-authorized for systems you are permitted to test."
-        )
+        console_print(message(args.lang, "authorization_refused"))
         return 2
 
     if config_path:
-        console_print(f"[i] Config: {config_path}")
+        console_print(message(args.lang, "config_path", path=config_path))
 
     target = normalize_target(args.target)
     if not target:
-        console_print("Invalid target URL.")
+        console_print(message(args.lang, "invalid_target"))
         return 2
 
     try:
@@ -650,13 +656,13 @@ def main(argv: list[str] | None = None) -> int:
             wordlist = _find_wordlist()
             if wordlist:
                 selected_paths = _load_paths_file(wordlist, limit=500)
-                console_print(f"[*] Wordlist: {wordlist} (max 500 paths)")
+                console_print(message(args.lang, "wordlist", path=wordlist))
             else:
-                console_print("[i] No system wordlist found; using the built-in safe path set.")
+                console_print(message(args.lang, "no_wordlist"))
         if not selected_paths:
             selected_paths = Settings().paths
     except ValueError as exc:
-        console_print(f"Configuration/scope error: {exc}")
+        console_print(message(args.lang, "scope_error", error=exc))
         return 2
 
     settings = Settings(
@@ -708,7 +714,7 @@ def main(argv: list[str] | None = None) -> int:
             backup_count=settings.log_backup_count,
         )
     except (OSError, ValueError) as exc:
-        console_print(f"Configuration/scope error: {exc}")
+        console_print(message(args.lang, "scope_error", error=exc))
         return 2
 
     proof: OwnershipProof | None = None
@@ -716,16 +722,26 @@ def main(argv: list[str] | None = None) -> int:
         proof = _verify_ownership(args, target)
         if not proof.verified:
             console_print(
-                f"Refusing to scan: ownership of {urlparse(target).hostname} is not verified. "
-                f"{proof.detail} Run with --ownership-token for instructions."
+                message(
+                    args.lang,
+                    "ownership_refused",
+                    host=urlparse(target).hostname,
+                    detail=proof.detail,
+                )
             )
             return 2
-        console_print(f"[+] Ownership verified for {proof.domain} via {proof.detail}.")
+        console_print(
+            message(args.lang, "ownership_verified", domain=proof.domain, detail=proof.detail)
+        )
 
     logger.info("Scan started target=%s addresses=%s", target, sorted(map(str, addresses)))
 
-    console_print(paint(f"[*] Target: {target}", "36;1"))
-    console_print(paint(f"[*] Paths: {len(settings.paths)} | Threads: {settings.threads}", "36"))
+    console_print(paint(message(args.lang, "target", target=target), "36;1"))
+    console_print(
+        paint(
+            message(args.lang, "paths", paths=len(settings.paths), threads=settings.threads), "36"
+        )
+    )
 
     scanner = Scanner(settings=settings, proxy=args.proxy)
     targets = [target]
@@ -759,9 +775,9 @@ def main(argv: list[str] | None = None) -> int:
             targets = safe_targets
             if target not in targets:
                 targets.insert(0, target)
-            console_print(f"[*] CT discovery: {len(targets) - 1} candidate host(s) added")
+            console_print(message(args.lang, "ct_added", count=len(targets) - 1))
         except Exception as exc:
-            console_print(f"CT discovery warning: {type(exc).__name__}: {exc}")
+            console_print(message(args.lang, "ct_warning", error=f"{type(exc).__name__}: {exc}"))
     if args.tui:
         from .tui import run_with_progress
 
@@ -798,10 +814,10 @@ def main(argv: list[str] | None = None) -> int:
             coverage["email"] = "checked"
         except Exception as exc:
             coverage["email"] = "failed"
-            console_print(f"DNS warning: {type(exc).__name__}: {exc}")
+            console_print(message(args.lang, "dns_warning", error=f"{type(exc).__name__}: {exc}"))
     if settings.tls_check_enabled and host and parsed_target.scheme == "https":
         if args.proxy:
-            console_print("[i] TLS certificate check skipped: a proxy is configured.")
+            console_print(message(args.lang, "tls_proxy"))
         else:
             try:
                 certificate = inspect_certificate(
@@ -809,16 +825,20 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if certificate.connect_error:
                     coverage["tls"] = "failed"
-                    console_print(f"TLS warning: {certificate.connect_error}")
+                    console_print(
+                        message(args.lang, "tls_warning", error=certificate.connect_error)
+                    )
                 else:
                     coverage["tls"] = "checked"
                 results = _attach_to_primary(results, target, tls_findings(certificate))
             except Exception as exc:
                 coverage["tls"] = "failed"
-                console_print(f"TLS warning: {type(exc).__name__}: {exc}")
+                console_print(
+                    message(args.lang, "tls_warning", error=f"{type(exc).__name__}: {exc}")
+                )
     wp_db_date = None
     if settings.cms_enabled:
-        results, wp_db_date = _match_wordpress_vulnerabilities(results)
+        results, wp_db_date = _match_wordpress_vulnerabilities(results, args.lang)
     if args.ignore_rule:
         ignored = set(args.ignore_rule)
         results = [
@@ -847,10 +867,7 @@ def main(argv: list[str] | None = None) -> int:
         vuln_db = default_db_path()
         enriched = []
         if not vuln_db.is_file():
-            console_print(
-                "[i] Local CMS advisory DB not found; run `web-audit --update-db` "
-                "before using --cms-vuln-lookup."
-            )
+            console_print(message(args.lang, "cms_db_missing"))
         for item in results:
             for finding in item.findings:
                 if not finding.rule_id.startswith("cms.detected."):
@@ -883,14 +900,19 @@ def main(argv: list[str] | None = None) -> int:
             save_diff(diff, settings.diff_path)
 
             console_print(
-                f"DIFF: {settings.diff_path} | "
-                f"added={diff['added_count']} removed={diff['removed_count']}"
+                message(
+                    args.lang,
+                    "diff",
+                    path=settings.diff_path,
+                    added=diff["added_count"],
+                    removed=diff["removed_count"],
+                )
             )
 
             lifecycle = summarize_lifecycle(previous_report, current_report)
             console_print(render_lifecycle_summary(lifecycle))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            console_print(f"Comparison error: {exc}")
+            console_print(message(args.lang, "comparison_error", error=exc))
             comparison_failed = True
     elif len(scan_history) >= 2:
         lifecycle = summarize_lifecycle_history(scan_history)
@@ -907,7 +929,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     action_plan_path = settings.json_path.with_name(f"{settings.json_path.stem}-actions.md")
     save_action_plan(target, results, action_plan_path, lifecycle=lifecycle)
-    save_owner_report(
+    owner_data = save_owner_report(
         target,
         results,
         settings.owner_path,
@@ -926,18 +948,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     for result in results:
-        _print_result(result)
+        _print_result(result, args.lang)
 
     stats = summary(results)
     console_print("")
-    console_print(paint(f"Scan #{scan_id} complete", "32;1"))
+    console_print(paint(message(args.lang, "scan_complete", scan_id=scan_id), "32;1"))
     console_print(
-        f"URLs={stats['total']} | 2xx={stats['2xx']} | 3xx={stats['3xx']} "
-        f"| 4xx={stats['4xx']} | 5xx={stats['5xx']} | errors={stats['errors']}"
+        message(
+            args.lang,
+            "stats_urls",
+            total=stats["total"],
+            ok=stats["2xx"],
+            redirects=stats["3xx"],
+            client=stats["4xx"],
+            server=stats["5xx"],
+            errors=stats["errors"],
+        )
     )
     console_print(
-        f"Findings={stats['findings']} | high={stats['high']} | medium={stats['medium']} "
-        f"| low={stats['low']} | info={stats['info']}"
+        message(
+            args.lang,
+            "stats_findings",
+            **{key: stats[key] for key in ("findings", "high", "medium", "low", "info")},
+        )
     )
     console_print(f"CSV : {settings.csv_path}")
     console_print(f"HTML: {settings.html_path}")
@@ -947,13 +980,21 @@ def main(argv: list[str] | None = None) -> int:
     console_print(f"SARIF: {settings.sarif_path}")
     console_print(f"DB  : {settings.db_path}")
     console_print(f"LOG : {settings.log_path}")
-    if args.open:
-        if _open_report(settings.html_path):
-            console_print(f"[*] Opened report: {settings.html_path.resolve()}")
+    status = owner_data["status"]
+    console_print("")
+    console_print(
+        paint(
+            message(args.lang, "status_line", status=UI[args.lang]["status_" + status]),
+            _STATUS_COLORS.get(status, "37;1"),
+        )
+    )
+    console_print(message(args.lang, "owner_report_line", path=settings.owner_path))
+    if args.open if args.open is not None else _desktop_session():
+        owner_path = settings.owner_path.resolve()
+        if _open_report(settings.owner_path):
+            console_print(message(args.lang, "opened_report", path=owner_path))
         else:
-            console_print(
-                f"[i] Could not open the report automatically; file: {settings.html_path.resolve()}"
-            )
+            console_print(message(args.lang, "open_failed", path=owner_path))
     if args.cms_vuln_lookup:
         console_print(f"NVD : {settings.output_dir / 'cms-advisories.json'}")
 
@@ -965,15 +1006,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.serve:
         if args.serve_host != "127.0.0.1" and not args.serve_public:
-            console_print("Refusing non-local dashboard bind without --serve-public.")
+            console_print(message(args.lang, "serve_local_only"))
             return 2
         token = args.serve_token or generate_token()
         if args.serve_host != "127.0.0.1" and not args.serve_token:
-            console_print("Public dashboard binding requires --serve-token.")
+            console_print(message(args.lang, "serve_token_required"))
             return 2
-        console_print(f"Dashboard token: {token}")
+        console_print(message(args.lang, "dashboard_token", token=token))
         console_print(
-            f"Dashboard: http://{args.serve_host}:{args.serve_port}/?access_token={token}"
+            message(
+                args.lang,
+                "dashboard_url",
+                url=f"http://{args.serve_host}:{args.serve_port}/?access_token={token}",
+            )
         )
         run_server(settings.db_path, host=args.serve_host, port=args.serve_port, token=token)
     return 1 if _meets_threshold(results, args.fail_on) else 0

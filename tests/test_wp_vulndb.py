@@ -364,4 +364,4 @@ def test_cli_warns_about_stale_database(monkeypatch, tmp_path, capsys):
     code, _, rules = _run(monkeypatch, tmp_path)
     assert code == 0
     assert "wordpress.vulnerable.plugin.elementor" in rules
-    assert "30 days old" in capsys.readouterr().out
+    assert "Базе уязвимостей WordPress уже 30 дн." in capsys.readouterr().out

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Terminal messages are available in English and Russian and follow the report
+  language (system locale or `--lang`); Russian runs show plain-language finding
+  titles. English output is unchanged.
+- Scans end with a colour-coded status line from the owner report and the
+  owner report path. On an interactive desktop the owner report opens
+  automatically; `--open`/`--no-open` override this. `--open` now opens the
+  owner report instead of the technical HTML report.
 - Fixed a crash when saving any scan that detected a CMS: the CMS finding's
   recommendation was a tuple, which SQLite cannot store (since 5.0.0).
   `Finding` now validates its field types, severity and confidence on creation.
