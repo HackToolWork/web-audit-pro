@@ -111,7 +111,7 @@ def findings(matches: tuple[CMSMatch, ...]) -> tuple[Finding, ...]:
             recommendation=(
                 "Verify the detected product and exact installed version, then review "
                 "the vendor security advisories and supported release policy."
-                + (f" Advisory source: {match.advisory_url}" if match.advisory_url else ""),
+                + (f" Advisory source: {match.advisory_url}" if match.advisory_url else "")
             ),
             confidence=match.confidence,
         )

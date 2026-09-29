@@ -38,9 +38,11 @@
   },
   {
     "product": "Magento",
-    "min_score": 1,
+    "min_score": 2,
     "body_markers": [
-      "mage/",
+      "data-mage-init",
+      "mage/cookies",
+      "magento_",
       "static/frontend/",
       "magento"
     ],
@@ -49,10 +51,12 @@
   },
   {
     "product": "PrestaShop",
-    "min_score": 1,
+    "min_score": 2,
     "body_markers": [
+      "var prestashop",
       "prestashop",
-      "/themes/"
+      "/modules/ps_",
+      "/themes/core.js"
     ],
     "header_markers": {},
     "advisory_url": "https://github.com/PrestaShop/PrestaShop/security/advisories"

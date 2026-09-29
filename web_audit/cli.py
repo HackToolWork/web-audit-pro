@@ -754,7 +754,8 @@ def main(argv: list[str] | None = None) -> int:
             results.extend(scanner.scan_target(discovered_target))
     parsed_target = urlparse(target)
     host = parsed_target.hostname or ""
-    host_is_domain = bool(host) and not _is_ip_literal(host)
+    # Mail records only exist for real domains, not IP literals or names like "localhost".
+    host_is_domain = "." in host and not _is_ip_literal(host)
     # Which optional checks actually completed, for the owner report. Anything not
     # recorded as "checked" is shown as unchecked rather than as passing.
     coverage = {
