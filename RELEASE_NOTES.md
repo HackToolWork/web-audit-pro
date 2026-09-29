@@ -1,3 +1,25 @@
+# Web Audit Pro 5.2.0
+
+Library APIs for hosted checks, used by the Sitozor web service (https://sitozor.ru).
+
+## Highlights
+
+- `web_audit.audit.run_audit()` runs the whole audit (scan, DNS/TLS/WordPress
+  checks, coverage) as a library call. It prints nothing; messages go to a
+  `notify` callback and network helpers can be injected. The CLI uses it, so
+  output is unchanged.
+- Ownership verification accepts a `token` callable. Multi-user services must
+  bind tokens to each request: with domain-only tokens, anyone asking about a
+  domain would receive the owner's published token and pass verification.
+
+## Installation
+
+```bash
+pipx install web-audit-pro
+```
+
+---
+
 # Web Audit Pro 5.1.0
 
 Plain-language security reports for site owners, in English and Russian.

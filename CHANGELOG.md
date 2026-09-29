@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 5.2.0
 
 - Added `web_audit.audit.run_audit()`, the scan pipeline as a library call
   (scan, DNS/TLS/WordPress checks, coverage) shared by the CLI and hosted
