@@ -56,7 +56,7 @@
   multiple records, missing or invalid `p=` policy, and monitor-only `p=none`.
   Subdomain targets fall back to the parent domain's `_dmarc` record.
 - Added a TLS certificate check for HTTPS targets: validation failures and
-  expiry within 30 days (high within 14). One verified handshake per target;
+  expiry within 30 days (high within 14). One verified TLS 1.2+ handshake per target;
   disable with `--no-tls-check` or `tls_check = false`. Skipped when `--proxy`
   is set so no direct connection bypasses the proxy.
 - Fixed DNS checks being silently skipped for domains containing digits

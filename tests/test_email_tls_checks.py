@@ -113,6 +113,25 @@ def test_inspect_certificate_reports_verification_failure(monkeypatch):
     assert report.connect_error == ""
 
 
+def test_inspect_certificate_requires_tls_1_2(monkeypatch):
+    contexts = []
+    real_context = ssl.create_default_context
+
+    def capture():
+        context = real_context()
+        contexts.append(context)
+        return context
+
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(tls_audit.ssl, "create_default_context", capture)
+    monkeypatch.setattr(tls_audit.socket, "create_connection", refuse)
+    tls_audit.inspect_certificate("example.com")
+    assert contexts[0].minimum_version == ssl.TLSVersion.TLSv1_2
+    assert contexts[0].verify_mode == ssl.CERT_REQUIRED and contexts[0].check_hostname
+
+
 def test_inspect_certificate_reports_connection_failure(monkeypatch):
     def refuse(*args, **kwargs):
         raise ConnectionRefusedError("refused")

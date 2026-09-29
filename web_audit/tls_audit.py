@@ -26,6 +26,8 @@ class CertificateReport:
 def inspect_certificate(host: str, port: int = 443, *, timeout: float = 5.0) -> CertificateReport:
     """Perform one verified TLS handshake and read the leaf certificate expiry."""
     context = ssl.create_default_context()
+    # Never negotiate TLS 1.0/1.1; a site offering only those reports a connection error.
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls:
