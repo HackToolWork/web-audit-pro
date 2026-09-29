@@ -60,7 +60,7 @@ Changelog = "https://github.com/HackToolWork/web-audit-pro/blob/main/CHANGELOG.m
 dev = [
   "pytest==9.1.1",
   "build==1.6.0",
-  "ruff==0.16.6",
+  "ruff==0.16.8",
   "httpx==0.28.1",
   "httpx2==2.12.0",
 ]
