@@ -42,5 +42,7 @@ This fail-closed design is intentional: damaged, missing or unknown verification
 
 - Tests never touch the network or local caches. `tests/conftest.py` stubs `cli.inspect_certificate` and points `WEB_AUDIT_WP_VULN_DB` and `WEB_AUDIT_OWNERSHIP_KEY_FILE` at temp paths for every test (override it in-test to exercise the TLS path); otherwise tests monkeypatch `scanner._session().get` with fake responses (see `tests/test_scanner.py`) or build `CheckResult`/report dicts directly. `tests/test_regression.py` and `tests/test_verification_pipeline.py` pin lifecycle edge cases.
 - Report files are written via `reports._atomic_write`.
+- `Finding.__post_init__` validates field types; build findings with plain `str` values.
+- `tests/test_end_to_end.py` runs the real Scanner, database and reports with only HTTP mocked; `lab/wordpress/start.sh` starts a local, deliberately outdated WordPress (127.0.0.1:8081) for manual end-to-end runs with `--allow-private`.
 - Safety model (from CONTRIBUTING/README): GET-only, low-impact, rate-limited requests. No credential attacks, destructive requests, unrestricted crawling, takeover attempts or authorization bypasses. Changes to network behavior, scope handling, rate limiting, storage, redaction or reporting need an explanation in the PR.
 - User-facing docs exist in two languages: update both `README.md` and `README.ru.md`, plus `CHANGELOG.md`.

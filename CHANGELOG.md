@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Fixed a crash when saving any scan that detected a CMS: the CMS finding's
+  recommendation was a tuple, which SQLite cannot store (since 5.0.0).
+  `Finding` now validates its field types, severity and confidence on creation.
+- Fixed false Magento and PrestaShop detections on WordPress sites (`image/`
+  matched `mage/`, and `/wp-content/themes/` matched `/themes/`); both now need
+  two platform-specific markers.
+- SPF/DMARC checks are skipped for single-label hosts such as `localhost`.
+- The owner report no longer shows "no serious issues" when WordPress plugins
+  were not checked against a vulnerability database or a TLS/email check
+  failed: the status becomes "incomplete" with an explanation, and the plugin
+  notice stays visible with any status. Findings confirmed by at least one
+  high-confidence observation are no longer marked as needing validation.
+- The owner report language now follows the system locale (`LC_ALL`,
+  `LC_MESSAGES`, `LANG`) unless `--lang` or `lang` in the config is set.
+- Without `--yes-i-am-authorized`, interactive runs ask for confirmation
+  (`y`/`да`, default no); non-interactive runs still refuse to scan.
+- Added a local WordPress test lab (`lab/wordpress/start.sh`) with a
+  deliberately outdated plugin, bound to 127.0.0.1, for end-to-end testing.
 - Added domain ownership verification. `--ownership-token` prints DNS TXT and
   `/.well-known/webaudit-verify.txt` instructions (English or Russian via
   `--lang`), `--verify-ownership` checks them, and `--require-ownership` (or
