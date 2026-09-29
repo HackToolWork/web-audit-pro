@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "web-audit-pro"
-version = "5.2.0"
+version = "5.2.1"
 description = "Free, low-impact website security checks with plain-language reports in English and Russian: TLS, email (SPF/DMARC), security headers and WordPress plugins."
 readme = "README.md"
 requires-python = ">=3.11"

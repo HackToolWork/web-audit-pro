@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 5.2.1
 
 - CMS and leaked-key (JavaScript) checks now count as checked only when at least
   one complete 2xx page was fetched; otherwise the owner report shows them as

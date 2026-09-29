@@ -1,3 +1,21 @@
+# Web Audit Pro 5.2.1
+
+## Fix
+
+CMS and leaked-key (JavaScript) checks now count as checked only when at least one
+complete page was fetched. Previously a site whose every request failed (for
+example because of an invalid TLS certificate) showed "Leaked keys: OK" in the
+owner report; it now shows "could not check". Found by the first real check
+through the Sitozor service (https://sitozor.ru).
+
+## Installation
+
+```bash
+pipx install web-audit-pro
+```
+
+---
+
 # Web Audit Pro 5.2.0
 
 Library APIs for hosted checks, used by the Sitozor web service (https://sitozor.ru).
