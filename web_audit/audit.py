@@ -113,9 +113,21 @@ def run_audit(
     host = parsed.hostname or ""
     # Mail records only exist for real domains, not IP literals or names like "localhost".
     host_is_domain = "." in host and not is_ip_literal(host)
+    # CMS and JavaScript checks read page content: they only count as checked when at
+    # least one complete 2xx page was fetched. A site that never answered is "failed".
+    fetched = any(
+        r.status is not None and 200 <= r.status < 300 and not r.error and not r.truncated
+        for r in results
+    )
+
+    def content_check(enabled: bool) -> str:
+        if not enabled:
+            return "not_checked"
+        return "checked" if fetched else "failed"
+
     coverage = {
-        "cms": "checked" if settings.cms_enabled else "not_checked",
-        "js": "checked" if settings.scan_js else "not_checked",
+        "cms": content_check(settings.cms_enabled),
+        "js": content_check(settings.scan_js),
         "email": "not_checked",
         "tls": "not_checked",
     }

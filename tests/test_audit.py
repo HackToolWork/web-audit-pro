@@ -99,3 +99,40 @@ def test_attach_to_primary_prefers_the_target_root():
     updated = attach_to_primary(results, TARGET, extra)
     assert updated[1].findings == extra and updated[0].findings == ()
     assert attach_to_primary([], TARGET, extra) == []
+
+
+class UnreachableScanner(FakeScanner):
+    def scan_target(self, url):
+        return [
+            CheckResult(
+                url=url + "/",
+                status=None,
+                size=0,
+                elapsed_ms=1.0,
+                scanned_at=datetime.now(UTC),
+                error="SSLError: certificate verify failed",
+            )
+        ]
+
+
+def test_content_checks_fail_when_no_page_was_fetched():
+    # Found on sitozor.ru: with an invalid certificate no page loads, so leaked-key
+    # and CMS checks never ran and must not be reported as passing.
+    run = _run(scanner_factory=UnreachableScanner)
+    assert run.coverage["js"] == "failed"
+    assert run.coverage["cms"] == "failed"
+    assert run.coverage["email"] == "checked"
+
+
+def test_disabled_content_checks_stay_not_checked():
+    from web_audit.config import Settings
+
+    settings = Settings(paths=("/",), scan_js=False, cms_enabled=False)
+    run = run_audit(
+        TARGET,
+        settings,
+        scanner_factory=UnreachableScanner,
+        inspect_domain=_dns,
+        inspect_certificate=_cert_ok,
+    )
+    assert run.coverage["js"] == "not_checked" and run.coverage["cms"] == "not_checked"

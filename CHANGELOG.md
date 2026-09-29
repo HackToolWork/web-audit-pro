@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.2.1
+
+- CMS and leaked-key (JavaScript) checks now count as checked only when at least
+  one complete 2xx page was fetched; otherwise the owner report shows them as
+  "could not check" instead of "OK". Found on a real site whose invalid
+  certificate prevented every page from loading.
+
 ## 5.2.0
 
 - Added `web_audit.audit.run_audit()`, the scan pipeline as a library call
