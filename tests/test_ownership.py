@@ -241,3 +241,26 @@ def test_scan_without_requirement_does_not_verify(monkeypatch, tmp_path):
         + ["--output-dir", str(tmp_path)]
     )
     assert code == 0
+
+
+def test_custom_token_binds_verification_to_a_request(monkeypatch):
+    def request_token(domain):
+        return f"webaudit-verify=request-{domain}"
+
+    _dns(monkeypatch, {"example.com": (token_for("example.com"),)})
+    assert ownership.verify_dns("example.com").verified
+    # The owner's domain-bound record does not satisfy another request's token.
+    assert not ownership.verify_dns("example.com", token=request_token).verified
+    _dns(monkeypatch, {"example.com": ("webaudit-verify=request-example.com",)})
+    assert ownership.verify_dns("example.com", token=request_token).verified
+    assert "webaudit-verify=request-example.com" in ownership.instructions(
+        "https://example.com", token=request_token
+    )
+
+
+def test_custom_token_applies_to_file_proof(monkeypatch):
+    _http(monkeypatch, _Response(body=b"webaudit-verify=request-example.com"))
+    proof = ownership.verify_file(
+        "https://example.com", token=lambda domain: f"webaudit-verify=request-{domain}"
+    )
+    assert proof.verified

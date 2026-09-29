@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import os
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -62,6 +63,9 @@ def _secret() -> bytes:
 def normalize_domain(value: str) -> str:
     host = urlsplit(value).hostname if "://" in value else value
     return (host or "").strip().rstrip(".").lower()
+
+
+TokenFor = Callable[[str], str]
 
 
 def token_for(domain: str) -> str:
@@ -117,7 +121,7 @@ _INSTRUCTIONS = {
 }
 
 
-def instructions(target: str, lang: str = "en") -> str:
+def instructions(target: str, lang: str = "en", *, token: TokenFor = token_for) -> str:
     """Plain instructions to forward to a site owner."""
     text = _INSTRUCTIONS[lang]
     host = normalize_domain(target)
@@ -127,14 +131,14 @@ def instructions(target: str, lang: str = "en") -> str:
         lines += [
             f"  {text['name']}: {domain}  ({text['or']} {DNS_LABEL}.{domain})",
             f"  {text['type']}: TXT",
-            f"  {text['value']}: {token_for(domain)}",
+            f"  {text['value']}: {token(domain)}",
             f"  {text['zone'] if domain != host else text['host']}",
             "",
         ]
     lines += [
         text["file"],
         f"  {text['url']}: https://{host}{FILE_PATH}",
-        f"  {text['content']}: {token_for(host)}",
+        f"  {text['content']}: {token(host)}",
         f"  {text['host']}",
         "",
         text["delay"],
@@ -142,10 +146,10 @@ def instructions(target: str, lang: str = "en") -> str:
     return "\n".join(lines)
 
 
-def verify_dns(host: str) -> OwnershipProof:
+def verify_dns(host: str, *, token: TokenFor = token_for) -> OwnershipProof:
     resolver = dns.resolver.Resolver()
     for domain in _parent_candidates(normalize_domain(host)):
-        expected = token_for(domain)
+        expected = token(domain)
         for name in (domain, f"{DNS_LABEL}.{domain}"):
             records = _resolve(resolver, name, "TXT")
             if any(record.strip().strip('"').strip() == expected for record in records):
@@ -160,6 +164,7 @@ def verify_file(
     verify_tls: bool = True,
     proxies: dict[str, str] | None = None,
     allow_private: bool = False,
+    token: TokenFor = token_for,
 ) -> OwnershipProof:
     parts = urlsplit(target if "://" in target else f"https://{target}")
     host = normalize_domain(parts.hostname or "")
@@ -192,17 +197,23 @@ def verify_file(
     except requests.RequestException as exc:
         return OwnershipProof(False, detail=f"{url} could not be fetched: {type(exc).__name__}")
     content = body[:MAX_FILE_BYTES].decode("utf-8", errors="replace")
-    if token_for(host) in {line.strip() for line in content.splitlines()}:
+    if token(host) in {line.strip() for line in content.splitlines()}:
         return OwnershipProof(True, "file", host, f"token file at {url}")
     return OwnershipProof(False, detail=f"{url} does not contain the expected token.")
 
 
-def verify(target: str, **file_options) -> OwnershipProof:
-    """Try DNS first (covers subdomains), then the token file."""
-    proof = verify_dns(normalize_domain(target))
+def verify(target: str, *, token: TokenFor = token_for, **file_options) -> OwnershipProof:
+    """Try DNS first (covers subdomains), then the token file.
+
+    ``token`` maps a domain to the expected value. The default binds tokens to the
+    domain, which suits a single operator. A multi-user service must bind tokens to
+    each request as well, or anyone asking about the same domain would receive the
+    owner's published token and pass verification.
+    """
+    proof = verify_dns(normalize_domain(target), token=token)
     if proof.verified:
         return proof
-    file_proof = verify_file(target, **file_options)
+    file_proof = verify_file(target, token=token, **file_options)
     if file_proof.verified:
         return file_proof
     return OwnershipProof(False, detail=f"{proof.detail} {file_proof.detail}")
