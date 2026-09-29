@@ -16,3 +16,6 @@ web-audit.toml
 # Build artifacts
 dist/
 build/
+
+# Local test lab credentials
+lab/**/.env

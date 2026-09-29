@@ -1,34 +1,52 @@
-# Web Audit Pro 5.0.1
+# Web Audit Pro 5.1.0
+
+Plain-language security reports for site owners, in English and Russian.
+Project site: https://sitozor.ru
 
 ## Release highlights
 
-### Makefile virtual-environment validation
+### Owner report
 
-Development targets now verify that required tools exist as executables in the
-selected virtual environment. This prevents an active-environment edge case
-from accidentally falling through to the wrong Python installation.
+Every scan writes `owner-report-*.html`: a traffic-light status, which areas were
+checked, what changed since the last scan, and "what it means / what to do" for
+each issue. Areas that did not run are shown as not checked, and a scan with
+unchecked WordPress plugins is never presented as all clear. White-label with
+`--company` and `--logo`. On an interactive desktop the report opens
+automatically.
 
-### CI reliability
+### New checks
 
-Regression coverage was updated to validate the improved Makefile behavior.
-The CI matrix covers Python 3.11, 3.12, 3.13, and 3.14, with package and
-Docker validation.
+- TLS certificate validity and expiry (TLS 1.2+ handshake).
+- DMARC; SPF, MX and DMARC fall back to the parent domain for hosts such as
+  `www.example.com`.
+- Passive WordPress plugin and theme inventory, and offline matching against the
+  Wordfence Intelligence vulnerability feed (`--update-wp-db`).
+- Domain ownership verification via DNS TXT or a `/.well-known` file
+  (`--ownership-token`, `--verify-ownership`, `--require-ownership`).
+
+### English and Russian
+
+Reports and terminal messages follow the system locale or `--lang en|ru`.
+Without `--yes-i-am-authorized`, an interactive run asks for confirmation.
+
+### Fixes
+
+- Scans of any site with a detected CMS crashed while saving results (since 5.0.0).
+- False Magento, PrestaShop, WordPress, Joomla and Ghost detections from generic
+  paths or from merely naming a platform in page text.
+- DNS checks skipped domains containing digits; mail checks ran for `localhost`.
 
 ## Installation
 
 ```bash
-sudo ./install.sh
-web-audit --version
+pipx install web-audit-pro
+web-audit https://example.com
 ```
 
-For contributors:
-
-```bash
-make install-dev
-make check
-```
+From source: `sudo ./install.sh`. For contributors: `make install-dev && make check`.
 
 ## Verification
 
-Local validation for the 5.0.1 release candidate includes Ruff linting and
-format checking, Python compilation, dependency checks, and 110 automated tests.
+CI runs Ruff, compile checks and the test suite on Python 3.11–3.14, plus package
+and Docker builds. The release workflow smoke-tests the wheel in a clean
+environment before publishing to PyPI through Trusted Publishing.

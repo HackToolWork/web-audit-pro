@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
 from .models import CheckResult
+
+
+def _verified_rules_from_json(value: str) -> list[str]:
+    """Treat damaged or unsupported coverage as unknown, never as verified."""
+    try:
+        rules = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(rules, list) or any(not isinstance(rule, str) for rule in rules):
+        return []
+    return rules
 
 
 class Database:
@@ -39,6 +51,8 @@ class Database:
                 truncated INTEGER NOT NULL CHECK(truncated IN (0, 1)),
                 location TEXT NOT NULL,
                 error TEXT NOT NULL,
+                verified_rules TEXT NOT NULL DEFAULT '[]',
+                verification_version INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
             );
 
@@ -66,6 +80,15 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE findings ADD COLUMN confidence TEXT NOT NULL DEFAULT 'medium'"
             )
+        result_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(results)")}
+        if "verified_rules" not in result_columns:
+            self.conn.execute(
+                "ALTER TABLE results ADD COLUMN verified_rules TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "verification_version" not in result_columns:
+            self.conn.execute(
+                "ALTER TABLE results ADD COLUMN verification_version INTEGER NOT NULL DEFAULT 0"
+            )
         self.conn.commit()
 
     def save_scan(
@@ -89,8 +112,9 @@ class Database:
                         """
                         INSERT INTO results(
                             scan_id, url, status, size, elapsed_ms,
-                            scanned_at, truncated, location, error
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            scanned_at, truncated, location, error,
+                            verified_rules, verification_version
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             scan_id,
@@ -102,6 +126,8 @@ class Database:
                             int(item.truncated),
                             item.location,
                             item.error,
+                            json.dumps(item.verified_rules),
+                            item.verification_version,
                         ),
                     )
                     result_id = int(result_cur.lastrowid)
@@ -130,6 +156,91 @@ class Database:
         except Exception:
             self.conn.rollback()
             raise
+
+    def load_scan_history(self, target: str) -> list[dict]:
+        """Load historical audit snapshots for a target, oldest first."""
+        scans = self.conn.execute(
+            """
+            SELECT id, target, started_at, finished_at, result_count
+            FROM scans
+            WHERE target = ?
+            ORDER BY started_at ASC, id ASC
+            """,
+            (target,),
+        ).fetchall()
+
+        history: list[dict] = []
+
+        for scan in scans:
+            results_rows = self.conn.execute(
+                """
+                SELECT
+                    r.id,
+                    r.url,
+                    r.status,
+                    r.size,
+                    r.elapsed_ms,
+                    r.scanned_at,
+                    r.truncated,
+                    r.location,
+                    r.error,
+                    r.verified_rules,
+                    r.verification_version
+                FROM results AS r
+                WHERE r.scan_id = ?
+                ORDER BY r.id ASC
+                """,
+                (scan["id"],),
+            ).fetchall()
+
+            results: list[dict] = []
+
+            for result in results_rows:
+                finding_rows = self.conn.execute(
+                    """
+                    SELECT
+                        rule_id,
+                        title,
+                        severity,
+                        category,
+                        evidence,
+                        recommendation,
+                        confidence
+                    FROM findings
+                    WHERE result_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (result["id"],),
+                ).fetchall()
+
+                results.append(
+                    {
+                        "url": result["url"],
+                        "status": result["status"],
+                        "size": result["size"],
+                        "elapsed_ms": result["elapsed_ms"],
+                        "scanned_at": result["scanned_at"],
+                        "truncated": bool(result["truncated"]),
+                        "location": result["location"],
+                        "error": result["error"],
+                        "verified_rules": _verified_rules_from_json(result["verified_rules"]),
+                        "verification_version": result["verification_version"],
+                        "findings": [dict(row) for row in finding_rows],
+                    }
+                )
+
+            history.append(
+                {
+                    "scan_id": int(scan["id"]),
+                    "target": scan["target"],
+                    "started_at": scan["started_at"],
+                    "finished_at": scan["finished_at"],
+                    "result_count": int(scan["result_count"]),
+                    "results": results,
+                }
+            )
+
+        return history
 
     def close(self) -> None:
         self.conn.close()

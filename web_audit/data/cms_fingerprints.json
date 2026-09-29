@@ -5,7 +5,8 @@
     "body_markers": [
       "wp-content/",
       "wp-includes/",
-      "wordpress"
+      "/wp-json/",
+      "name=\"generator\" content=\"wordpress"
     ],
     "header_markers": {
       "Link": "api.w.org"
@@ -30,17 +31,19 @@
     "min_score": 1,
     "body_markers": [
       "/media/system/js/",
-      "joomla!",
-      "com_content"
+      "com_content",
+      "name=\"generator\" content=\"joomla!"
     ],
     "header_markers": {},
     "advisory_url": "https://developer.joomla.org/security-centre.html"
   },
   {
     "product": "Magento",
-    "min_score": 1,
+    "min_score": 2,
     "body_markers": [
-      "mage/",
+      "data-mage-init",
+      "mage/cookies",
+      "magento_",
       "static/frontend/",
       "magento"
     ],
@@ -49,10 +52,12 @@
   },
   {
     "product": "PrestaShop",
-    "min_score": 1,
+    "min_score": 2,
     "body_markers": [
+      "var prestashop",
       "prestashop",
-      "/themes/"
+      "/modules/ps_",
+      "/themes/core.js"
     ],
     "header_markers": {},
     "advisory_url": "https://github.com/PrestaShop/PrestaShop/security/advisories"
@@ -61,9 +66,10 @@
     "product": "Ghost",
     "min_score": 1,
     "body_markers": [
-      "ghost.org",
       "content/ghost/",
-      "ghost-head"
+      "/ghost/api/",
+      "data-ghost",
+      "name=\"generator\" content=\"ghost"
     ],
     "header_markers": {},
     "advisory_url": "https://ghost.org/security/"

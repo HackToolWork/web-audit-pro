@@ -272,4 +272,247 @@ def test_version_flag_prints_project_name_and_version(capsys):
     except SystemExit as exc:
         assert exc.code == 0
     output = capsys.readouterr().out.strip()
-    assert output == "web-audit-pro 5.0.1"
+    from web_audit import __version__
+
+    assert output == f"web-audit-pro {__version__}"
+
+
+def test_cli_compare_renders_lifecycle_summary(monkeypatch, tmp_path, capsys):
+    from datetime import UTC, datetime
+
+    from web_audit.models import CheckResult, Finding
+
+    previous_report = tmp_path / "previous.json"
+    previous_report.write_text(
+        """
+{
+  "schema_version": "4.0",
+  "tool": "Web Audit Pro",
+  "target": "https://example.com",
+  "generated_at": "2026-09-10T00:00:00+00:00",
+  "summary": {},
+  "results": [
+    {
+      "url": "https://example.com/",
+      "status": 200,
+      "size": 10,
+      "elapsed_ms": 1.0,
+      "scanned_at": "2026-09-10T00:00:00+00:00",
+      "truncated": false,
+      "location": "",
+      "error": "",
+      "findings": [
+        {
+          "rule_id": "headers.referrer_policy",
+          "title": "Missing Referrer-Policy header",
+          "severity": "low",
+          "category": "headers",
+          "evidence": "missing",
+          "recommendation": "Set a Referrer-Policy header.",
+          "confidence": "high"
+        }
+      ]
+    }
+  ]
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "resolve_target_addresses", lambda target: set())
+
+    class DummyScanner:
+        def __init__(self, settings, proxy=None):
+            self.settings = settings
+
+        def scan_target(self, target):
+            return [
+                CheckResult(
+                    url=target + "/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(
+                        Finding(
+                            rule_id="cors.wildcard_credentials",
+                            title="Wildcard CORS with credentials",
+                            severity="medium",
+                            category="cors",
+                            evidence="Access-Control-Allow-Origin: *",
+                            recommendation="Restrict allowed origins.",
+                        ),
+                    ),
+                    verified_rules=("headers.referrer_policy",),
+                    verification_version=1,
+                )
+            ]
+
+    monkeypatch.setattr(cli, "Scanner", DummyScanner)
+
+    code = cli.main(
+        [
+            "https://example.com",
+            "--yes-i-am-authorized",
+            "--paths",
+            "/",
+            "--no-dns",
+            "--no-cms",
+            "--output-dir",
+            str(tmp_path / "current"),
+            "--compare",
+            str(previous_report),
+        ]
+    )
+
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert "DIFF:" in output
+    assert "Security changes" in output
+    assert "NEW         1" in output
+    assert "FIXED       1" in output
+    assert "[NEW] cors.wildcard_credentials" in output
+    assert "[FIXED] headers.referrer_policy" in output
+    html_report = next((tmp_path / "current").glob("report-*.html")).read_text(encoding="utf-8")
+    assert "[FIXED] headers.referrer_policy" in html_report
+    assert "[NEW] cors.wildcard_credentials" in html_report
+
+
+def test_failed_comparison_still_saves_current_html(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "resolve_target_addresses", lambda target: set())
+
+    class EmptyScanner:
+        def __init__(self, settings, proxy=None):
+            pass
+
+        def scan_target(self, target):
+            return []
+
+    monkeypatch.setattr(cli, "Scanner", EmptyScanner)
+    output_dir = tmp_path / "current"
+    code = cli.main(
+        [
+            "https://example.com",
+            "--yes-i-am-authorized",
+            "--paths",
+            "/",
+            "--no-dns",
+            "--no-cms",
+            "--output-dir",
+            str(output_dir),
+            "--compare",
+            str(tmp_path / "missing.json"),
+        ]
+    )
+
+    assert code == 2
+    assert "Comparison error:" in capsys.readouterr().out
+    assert len(list(output_dir.glob("report-*.html"))) == 1
+
+
+def test_cli_uses_database_history_for_regression(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from datetime import UTC, datetime
+
+    from web_audit.database import Database
+    from web_audit.models import CheckResult, Finding
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_target_addresses",
+        lambda target: set(),
+    )
+
+    finding = Finding(
+        "headers.csp",
+        "CSP",
+        "low",
+        "headers",
+        "missing",
+        "add CSP",
+    )
+
+    output_dir = tmp_path / "reports"
+    db_path = output_dir / "audit_results.db"
+
+    with Database(db_path) as db:
+        db.save_scan(
+            "https://example.com",
+            "2026-09-10T10:00:00+00:00",
+            "2026-09-10T10:01:00+00:00",
+            [
+                CheckResult(
+                    url="https://example.com/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(finding,),
+                )
+            ],
+        )
+
+        db.save_scan(
+            "https://example.com",
+            "2026-09-10T11:00:00+00:00",
+            "2026-09-10T11:01:00+00:00",
+            [
+                CheckResult(
+                    url="https://example.com/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(),
+                    verified_rules=("headers.csp",),
+                    verification_version=1,
+                )
+            ],
+        )
+
+    class DummyScanner:
+        def __init__(self, settings, proxy=None):
+            self.settings = settings
+
+        def scan_target(self, target):
+            return [
+                CheckResult(
+                    url=target + "/",
+                    status=200,
+                    size=10,
+                    elapsed_ms=1.0,
+                    scanned_at=datetime.now(UTC),
+                    findings=(finding,),
+                )
+            ]
+
+    monkeypatch.setattr(
+        cli,
+        "Scanner",
+        DummyScanner,
+    )
+
+    code = cli.main(
+        [
+            "https://example.com",
+            "--yes-i-am-authorized",
+            "--paths",
+            "/",
+            "--no-dns",
+            "--no-cms",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert "Security changes" in output
+    assert "REGRESSED   1" in output
+    assert "[REGRESSED] headers.csp" in output

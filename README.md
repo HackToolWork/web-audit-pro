@@ -2,23 +2,34 @@
 
 [![CI](https://github.com/HackToolWork/web-audit-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/HackToolWork/web-audit-pro/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/HackToolWork/web-audit-pro/actions/workflows/codeql.yml/badge.svg)](https://github.com/HackToolWork/web-audit-pro/actions/workflows/codeql.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/HackToolWork/web-audit-pro/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Security](https://img.shields.io/badge/security-responsible%20use-green.svg)](SECURITY.md)
+[![Security](https://img.shields.io/badge/security-responsible%20use-green.svg)](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md)
 
-**English** | [Русский](README.ru.md)
+**English** | [Русский](https://github.com/HackToolWork/web-audit-pro/blob/main/README.ru.md)
 
-> **Web Audit Pro is a low-impact, auditable toolkit for authorized web security assessment, security engineering, and bug-bounty triage.**
+> **Web Audit Pro is a low-impact, auditable toolkit for authorized web security assessment, security engineering, and bug-bounty triage** — with plain-language reports that site owners understand, in English and Russian.
+>
+> Project site: **[sitozor.ru](https://sitozor.ru)** (Sitozor)
 
 It combines deterministic HTTP checks, passive DNS and JavaScript analysis, CMS fingerprinting, local vulnerability enrichment, scope enforcement, rate limiting, scan history, reproducible reports, SARIF output, an optional TUI, and a local read-only dashboard.
 
-**Use it only on systems you own or are explicitly authorized to assess.** The authorization flag is an acknowledgement, not legal permission.
+**Use it only on systems you own or are explicitly authorized to assess.** The authorization flag is an acknowledgement, not legal permission. Without it, an interactive run asks for confirmation; scripts and CI must pass `--yes-i-am-authorized`.
 
 ---
 
 ## 60-second start
 
-### Kali Linux / Debian / Ubuntu
+### Any system with Python 3.11+ (recommended)
+
+```bash
+pipx install web-audit-pro
+web-audit https://example.com
+```
+
+[pipx](https://pipx.pypa.io/) installs the tool in its own environment (`sudo apt install pipx` on Kali/Debian/Ubuntu). `pip install web-audit-pro` works too. The scan asks you to confirm that you may test the site, then opens the owner report.
+
+### Kali Linux / Debian / Ubuntu from source
 
 ```bash
 git clone https://github.com/HackToolWork/web-audit-pro.git
@@ -32,9 +43,9 @@ web-audit example.com --yes-i-am-authorized
 ```bash
 docker build -t web-audit-pro:local .
 mkdir -p reports
-docker run --rm \\
-  -u "$(id -u):$(id -g)" \\
-  -v "$PWD/reports:/app/reports" \\
+docker run --rm \
+  -u "$(id -u):$(id -g)" \
+  -v "$PWD/reports:/app/reports" \
   web-audit-pro:local example.com --yes-i-am-authorized
 ```
 
@@ -78,8 +89,10 @@ A finding is a **lead for human verification**, not automatic proof of exploitab
 | CORS | Wildcard / credential combinations | Enabled |
 | Disclosure | `Server`, `X-Powered-By` | Enabled |
 | JavaScript | Same-origin credential-like pattern detection with redaction | Optional (`--scan-js`) |
-| DNS | A/AAAA, MX, TXT, SPF, CNAME observations | Optional / configurable |
+| DNS | A/AAAA, MX, TXT, SPF and DMARC (both with parent-domain fallback), CNAME observations | Optional / configurable |
+| TLS certificate | Validation failures, expiry within 30 days (high within 14) | Enabled for HTTPS targets (`--no-tls-check` to disable; skipped with `--proxy`) |
 | CMS | Fingerprinting and advisory references | Optional / configurable |
+| WordPress | Plugin and theme inventory with versions from already-fetched HTML (no extra requests; ambiguous versions reported as unknown) | With CMS detection |
 | Vulnerability DB | Local CVE/advisory lookup | Offline after `--update-db` |
 | Subdomains | Certificate Transparency candidates | Optional (`--discover-subdomains`) |
 | History | Scan-to-scan comparison | Available |
@@ -135,6 +148,26 @@ web-audit example.com \
 
 Normal audits do not contact NVD just because CMS enrichment is enabled.
 
+#### WordPress plugins and themes
+
+Detected WordPress plugin and theme versions can be checked offline against the
+[Wordfence Intelligence](https://www.wordfence.com/threat-intel/) vulnerability
+feed, which is free for commercial use but requires a free API key from a
+Wordfence account. Download it explicitly:
+
+```bash
+export WORDFENCE_API_KEY=your-key
+web-audit --update-wp-db
+```
+
+Later audits use the local copy automatically without contacting Wordfence and
+warn when it is older than seven days. Wordfence rate-limits the feed and may
+suspend keys that keep exceeding the limit, so `--update-wp-db` sends no request
+while the local copy is under 12 hours old or for 12 hours after an HTTP 429. A component is reported as vulnerable
+only when its version was detected unambiguously and falls inside an affected
+range. Reports show the data source and the copyright notices required by the
+feed's terms. `WEB_AUDIT_WP_VULN_DB` overrides the database location.
+
 ### 5. Internal laboratory target
 
 For a private RFC1918, loopback, or other explicitly non-public target in an authorized lab:
@@ -153,15 +186,40 @@ web-audit example.com \
   --fail-on medium
 ```
 
-### 7. Open the generated report
+### 7. Open the owner report
+
+After an interactive scan on a desktop, the owner report opens in the browser
+automatically. `--open` forces it (for example over SSH with X forwarding) and
+`--no-open` turns it off:
 
 ```bash
 web-audit example.com \
   --yes-i-am-authorized \
-  --open
+  --no-open
 ```
 
-### 8. Local dashboard
+Terminal messages use the same language as the report (system locale or `--lang`).
+
+### 8. Plain-language owner report
+
+Every run also writes `owner-report-*.html`: a short report for non-technical site
+owners with a traffic-light status, which areas were checked, what changed since the
+previous scan, and what to do for each issue. Use `--company` and `--logo` for your
+own branding. The language follows the system locale (Russian on a Russian
+system); `--lang en|ru` overrides it:
+
+```bash
+web-audit example.com \
+  --yes-i-am-authorized \
+  --lang ru \
+  --company "Example Studio" \
+  --logo logo.png
+```
+
+Areas that did not run are shown as "not checked", never as OK. The report is a
+single HTML file that prints cleanly to PDF from a browser.
+
+### 9. Local dashboard
 
 ```bash
 web-audit example.com \
@@ -224,6 +282,30 @@ Relative paths are resolved using the configuration context rather than a develo
 
 ---
 
+## Ownership verification
+
+`--yes-i-am-authorized` is an acknowledgement. When you scan sites for other
+people, have them prove ownership first:
+
+```bash
+web-audit https://www.example.com --ownership-token --lang ru   # instructions to forward
+web-audit https://www.example.com --verify-ownership            # check the proof
+web-audit https://www.example.com --yes-i-am-authorized --require-ownership
+```
+
+The owner publishes a token either as a DNS TXT record (at the domain or
+`_webaudit.<domain>`; covers the domain and its subdomains) or in
+`/.well-known/webaudit-verify.txt` (covers that host only; redirects are not
+followed and non-public addresses are never fetched). With `--require-ownership`
+or `require_ownership = true` in `[scan]`, unverified targets are refused and
+discovered subdomains outside the proof are skipped. The owner report states how
+ownership was verified.
+
+Tokens are an HMAC of the domain under a local secret in
+`~/.config/web-audit-pro/ownership.key` (override with
+`WEB_AUDIT_OWNERSHIP_KEY_FILE`). Back it up: replacing it invalidates every token
+already issued.
+
 ## Scope control
 
 Scope control is a core safety feature, not an optional afterthought.
@@ -274,12 +356,45 @@ The tool does not require Kali wordlists and safely falls back to its built-in p
 The scanner can produce:
 
 - **HTML** for people and client-facing review;
+- **Markdown action plan** for a prioritized checklist with evidence and affected URLs;
 - **JSON** for automation and scan comparison;
 - **CSV** for spreadsheets and triage;
 - **SARIF 2.1.0** for security tooling and CI integrations;
 - **SQLite** for local history and dashboard access.
 
 By default, generated files include a run identifier so parallel containers do not overwrite one another.
+
+### Work through the action plan
+
+Each scan includes an action plan in its HTML report and automatically writes
+a companion `*-actions.md` file. Findings are grouped by rule, ordered by severity,
+then by the number of distinct affected URLs, then by rule ID. Each task keeps
+the evidence, URLs, recommendation, and guidance for checking the result again.
+Findings with uncertain confidence or incomplete responses need validation
+first; informational findings are marked for review.
+
+This order is a triage aid, not proof of exploitability or business impact.
+Request errors, incomplete coverage, and `UNVERIFIED` rechecks remain visible;
+an empty finding list does not establish that the site is secure.
+Reports include captured evidence and URLs; review that content before sharing it.
+
+After a change, rerun the same URLs with the same scan settings and compare the
+results. Automatic confirmation applies only to the supported response rules
+listed below. Other rules require manual verification, and a passed header
+presence check does not validate the policy's effectiveness.
+
+To see a complete example without contacting a site, run from the repository
+root with dependencies installed:
+
+```bash
+python -m examples.action_plan_demo --output-dir reports/action-plan-demo
+```
+
+Open `reports/action-plan-demo/index.html` for the real HTML report, or
+`action-plan.md` in the same directory for the checklist. `report.json` contains
+the supporting observations. The synthetic data includes a disabled HSTS policy,
+missing CSP on two URLs, informational server headers, and a timeout that leaves
+a previous finding unverified. The demo makes no network connections.
 
 ### Compare two scans
 
@@ -288,6 +403,48 @@ web-audit example.com \
   --yes-i-am-authorized \
   --compare reports/previous.json
 ```
+
+The CLI and HTML report show finding lifecycle changes. Without `--compare`,
+previous scans for the same target in the local database provide the history.
+
+- **FIXED** means a supported rule explicitly passed on a complete, successful
+  `2xx` response for the same target and normalized URL, without a request error.
+- **UNVERIFIED** means a finding is absent but its resolution could not be
+  confirmed: for example, the URL was skipped, the request failed, the response
+  was truncated, the rule was ignored, or verification metadata is unavailable.
+  The report includes the reason. An inconclusive check does not establish a
+  fix or make the next observed finding a regression.
+
+Verified closure currently covers these nine response rules:
+`headers.hsts`, `headers.hsts_disabled`, `headers.content_type_options`,
+`headers.csp`, `headers.csp_report_only`, `headers.referrer_policy`,
+`headers.clickjacking`, `cors.wildcard_credentials`, and `info.stack_headers`.
+Passing conditions must be present in the response; simply losing a finding is
+insufficient. Absence of cookie, body-content, DNS, TLS certificate, CMS, JavaScript, or redirect
+findings is not automatically marked fixed. A passed rule describes that
+response at that time, not the security of the whole application.
+For CSP and Referrer-Policy this checks for a nonempty header; policy syntax,
+valid values, and effectiveness are not validated. In particular, FIXED for
+`headers.csp` confirms that the header is no longer missing, not that CSP is
+configured correctly.
+
+JSON schema **4.1** adds per-result `verification_version` and `verified_rules`.
+Existing JSON reports remain readable. SQLite databases receive an additive
+migration that preserves earlier scans; old rows have no verification metadata.
+Historical absence without this metadata cannot establish a fix or regression.
+The scanner, local history, comparison, report exports, and branding remain
+free; this change adds no subscription or account requirement.
+
+### Try the recheck demo offline
+
+From the repository root, with dependencies installed:
+
+```bash
+python -m examples.recheck_demo --output-dir reports/recheck-demo
+```
+
+Open `reports/recheck-demo/index.html` to compare the generated scenario reports.
+The demo uses simulated HTTP responses, opens no sockets, and does not scan a site.
 
 ### SARIF in CI
 
@@ -327,9 +484,9 @@ For persistent reports and the local advisory DB:
 
 ```bash
 mkdir -p reports
-docker run --rm \\
-  -u "$(id -u):$(id -g)" \\
-  -v "$PWD/reports:/app/reports" \\
+docker run --rm \
+  -u "$(id -u):$(id -g)" \
+  -v "$PWD/reports:/app/reports" \
   web-audit-pro:local --help
 ```
 
@@ -375,11 +532,16 @@ web-audit-pro/
 │   ├── data/              # packaged CMS fingerprint data
 │   ├── scanner.py         # HTTP scanning engine
 │   ├── dns_audit.py       # passive DNS analysis
+│   ├── tls_audit.py       # TLS certificate validity and expiry
 │   ├── js_audit.py        # passive JavaScript analysis
 │   ├── cms.py             # CMS fingerprinting
+│   ├── wordpress.py       # passive WordPress plugin/theme inventory
+│   ├── wp_vulndb.py       # offline Wordfence vulnerability matching
+│   ├── ownership.py       # DNS/file domain ownership verification
 │   ├── vulndb.py          # local advisory DB
 │   ├── nvd.py             # explicit advisory DB update client
 │   ├── reports.py         # HTML/JSON/CSV reporting
+│   ├── owner_report.py    # plain-language owner report (texts in owner_texts.py)
 │   ├── sarif.py           # SARIF output
 │   ├── serve.py            # read-only dashboard
 │   └── tui.py              # terminal UI
@@ -413,7 +575,7 @@ It intentionally does **not** provide:
 
 Before testing a public program, read its rules, identify the exact in-scope hosts, respect its rate limits, and keep evidence sufficient to reproduce findings without exposing secrets unnecessarily.
 
-See [SECURITY.md](SECURITY.md) for the project's security policy and reporting process.
+See [SECURITY.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md) for the project's security policy and reporting process.
 
 ---
 
@@ -442,9 +604,9 @@ Please keep changes focused, add regression tests for bug fixes, avoid developer
 
 Read:
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- [SECURITY.md](SECURITY.md)
+- [CONTRIBUTING.md](https://github.com/HackToolWork/web-audit-pro/blob/main/CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](https://github.com/HackToolWork/web-audit-pro/blob/main/CODE_OF_CONDUCT.md)
+- [SECURITY.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md)
 
 ---
 
@@ -465,10 +627,10 @@ The repository also runs CodeQL and dependency review through GitHub Actions.
 ## Support and community
 
 - **Repository:** https://github.com/HackToolWork/web-audit-pro
-- **Security:** [SECURITY.md](SECURITY.md)
-- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Support:** [SUPPORT.md](SUPPORT.md)
-- **License:** [Apache-2.0](LICENSE)
+- **Security:** [SECURITY.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SECURITY.md)
+- **Contributing:** [CONTRIBUTING.md](https://github.com/HackToolWork/web-audit-pro/blob/main/CONTRIBUTING.md)
+- **Support:** [SUPPORT.md](https://github.com/HackToolWork/web-audit-pro/blob/main/SUPPORT.md)
+- **License:** [Apache-2.0](https://github.com/HackToolWork/web-audit-pro/blob/main/LICENSE)
 
 ### Sponsorship
 
@@ -480,4 +642,4 @@ Web Audit Pro is open source. Sponsorship can support maintenance, documentation
 
 Web Audit Pro is licensed under the **Apache License 2.0**.
 
-See [LICENSE](LICENSE).
+See [LICENSE](https://github.com/HackToolWork/web-audit-pro/blob/main/LICENSE).
