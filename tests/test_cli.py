@@ -272,7 +272,9 @@ def test_version_flag_prints_project_name_and_version(capsys):
     except SystemExit as exc:
         assert exc.code == 0
     output = capsys.readouterr().out.strip()
-    assert output == "web-audit-pro 5.0.1"
+    from web_audit import __version__
+
+    assert output == f"web-audit-pro {__version__}"
 
 
 def test_cli_compare_renders_lifecycle_summary(monkeypatch, tmp_path, capsys):

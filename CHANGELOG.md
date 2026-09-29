@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 5.1.0
 
 - Terminal messages are available in English and Russian and follow the report
   language (system locale or `--lang`); Russian runs show plain-language finding
